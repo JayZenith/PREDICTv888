@@ -172,3 +172,60 @@ index 8d1baa6..2040119 100644
      "Rollout",
      "SFTDistillAlgorithm",
      "build_algorithm",
+diff --git a/src/prime_rl/trainer/optim.py b/src/prime_rl/trainer/optim.py
+index cb0b3d2..4629eb9 100644
+--- a/src/prime_rl/trainer/optim.py
++++ b/src/prime_rl/trainer/optim.py
+@@ -30,6 +30,10 @@ class CPUOffloadOptimizer:
+     def _move_states(self, device: str):
+         """Move optimizer states to CPU or back to GPU (matching each parameter's device)."""
+         for p in self.optimizer.state:
++            self._move_param_state(p, device)
++
++    def _move_param_state(self, p, device: str):
++        if p in self.optimizer.state:
+             state = self.optimizer.state[p]
+             for k, v in state.items():
+                 if isinstance(v, DTensor):
+@@ -55,22 +59,25 @@ class CPUOffloadOptimizer:
+                         state[k] = v.to(device, non_blocking=True)
+ 
+     def step(self, closure=None):
+-        # First step initializes states on GPU - offload after
+-        if not self._initialized:
+-            result = self.optimizer.step(closure)
+-            self._move_states("cpu")
+-            self._initialized = True
+-            return result
+-
+-        # Move states to GPU
+-        self._move_states("cuda")
+-
+-        # Run optimizer step
+-        result = self.optimizer.step(closure)
+-
+-        # Move states back to CPU
+-        self._move_states("cpu")
+-
++        # Step one parameter at a time so only that parameter's states are on GPU.
++        # Peak memory is weights + grads + the largest single state, not all states.
++        groups = self.optimizer.param_groups
++        saved = [group["params"] for group in groups]
++        result = None
++        try:
++            for group in groups:
++                group["params"] = []
++            for group, params in zip(groups, saved):
++                for p in params:
++                    group["params"] = [p]
++                    self._move_param_state(p, "cuda")
++                    result = self.optimizer.step(closure)
++                    self._move_param_state(p, "cpu")
++                group["params"] = []
++        finally:
++            for group, params in zip(groups, saved):
++                group["params"] = params
++        self._initialized = True
+         return result
+ 
+     def zero_grad(self, set_to_none: bool = True):
