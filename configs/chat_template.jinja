@@ -1,7 +1,7 @@
 {%- for message in messages %}
 {%- set role = message['role'] %}
 {%- set content = message['content'] %}
-{{- '<|im_start|>' + role + '\n' + content.rstrip() + '\n<|im_end|>\n\n' }}
+{{- '<|im_start|>' + role + '\n' + content.rstrip() + '\n<|endoftext|>\n\n' }}
 {%- endfor %}
 {%- if add_generation_prompt %}
 {{- '<|im_start|>assistant\n' }}

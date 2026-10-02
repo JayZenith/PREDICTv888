@@ -8,13 +8,13 @@ group = "matched-sft"
 name = "arm-a-sft"
 
 [model]
-name = "outputs/base"  # Qwen3-1.7B-Base, see scripts/init_base.py
+name = "Qwen/Qwen3-1.7B-Base"
 impl = "auto"
 seq_len = 1792
 
 [tokenizer]
 chat_template = "configs/chat_template.jinja"
-eos_token = "<|im_end|>"
+eos_token = "<|endoftext|>"
 
 [data]
 type = "sft"

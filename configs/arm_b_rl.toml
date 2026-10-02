@@ -8,7 +8,7 @@ name = "outputs/arm_b_sft/weights/step_20"
 
 [tokenizer]
 chat_template = "configs/chat_template.jinja"
-eos_token = "<|im_end|>"
+eos_token = "<|endoftext|>"
 
 [wandb]
 project = "predict-mbpp-1.7b"
@@ -28,7 +28,7 @@ name = "default"
 [orchestrator.train.sampling]
 temperature = 0.8
 max_completion_tokens = 512
-extra_body = { stop_token_ids = [151645], top_k = 20 }
+extra_body = { stop_token_ids = [151643], top_k = 20 }
 
 [[orchestrator.train.env]]
 name = "arm-b-train"
@@ -48,7 +48,7 @@ group_size = 1
 [orchestrator.eval.sampling]
 temperature = 0.0
 max_completion_tokens = 512
-extra_body = { stop_token_ids = [151645] }
+extra_body = { stop_token_ids = [151643] }
 
 [[orchestrator.eval.env]]
 name = "arm-b-validation"
