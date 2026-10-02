@@ -10,7 +10,7 @@ name = "arm-a-sft"
 [model]
 name = "Qwen/Qwen3-1.7B-Base"
 impl = "auto"
-seq_len = 1664
+seq_len = 1792
 
 [tokenizer]
 chat_template = "configs/chat_template.jinja"
@@ -21,7 +21,7 @@ type = "sft"
 name = "data/sft/arm_a"
 batch_size = 32
 micro_batch_size = 1
-seq_len = 1664
+seq_len = 1792
 pack_function = "stack"
 shuffle = true
 seed = 42

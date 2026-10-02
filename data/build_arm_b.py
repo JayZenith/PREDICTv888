@@ -249,8 +249,8 @@ def main():
     lengths = [len(tokenizer(text, add_special_tokens=False)["input_ids"]) for text in rendered]
     maximum = max(lengths)
     print(f"Maximum SFT tokens: {maximum} ({output[lengths.index(maximum)]['case_id']})", flush=True)
-    too_long = [(r["case_id"], n) for r, n in zip(output, lengths, strict=True) if n > 1664]
-    require(not too_long, f"Rows exceed 1664 tokens; no output written, no truncation: {too_long}")
+    too_long = [(r["case_id"], n) for r, n in zip(output, lengths, strict=True) if n > 1792]
+    require(not too_long, f"Rows exceed 1792 tokens; no output written, no truncation: {too_long}")
     changes = {ROOT / "data/sft/arm_b/train.jsonl": encode(output)}
     for split in ("train", "validation", "test"):
         path = ROOT / f"data/arm_b_{split}.jsonl"
