@@ -4,7 +4,7 @@ seq_len = 4096
 output_dir = "outputs/arm_b_rl"
 
 [model]
-name = "outputs/arm_b_sft/weights/step_60"
+name = "outputs/arm_b_sft/weights/step_20"
 
 [tokenizer]
 chat_template = "configs/chat_template.jinja"
@@ -26,7 +26,7 @@ type = "grpo"
 name = "default"
 
 [orchestrator.train.sampling]
-temperature = 1.0
+temperature = 0.8
 max_completion_tokens = 512
 extra_body = { stop_token_ids = [151645], top_k = 20 }
 

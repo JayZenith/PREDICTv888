@@ -1,5 +1,5 @@
 # Arm A: full-parameter SFT on 212 verified protocol traces.
-max_steps = 60
+max_steps = 20
 output_dir = "outputs/arm_a_sft"
 
 [wandb]
@@ -40,11 +40,11 @@ weight_decay = 0.01
 [scheduler]
 type = "linear"
 warmup_steps = 2
-decay_steps = 58
+decay_steps = 18
 min_lr = 0.0
 
 [ckpt]
-interval = 60
+interval = 20
 keep_last = 1
 weights_only = true
 
