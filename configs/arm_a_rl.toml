@@ -26,7 +26,7 @@ type = "grpo"
 name = "default"
 
 [orchestrator.train.sampling]
-temperature = 0.8
+temperature = 1.0
 max_completion_tokens = 512
 extra_body = { stop_token_ids = [151645], top_k = 20 }
 
