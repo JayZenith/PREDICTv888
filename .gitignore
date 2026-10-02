@@ -1,34 +1,7 @@
-# Python and local environments
 __pycache__/
-*.py[cod]
-.pytest_cache/
 .venv/
-.venv-*/
-venv/
-.uv/
 .vendor/
-
-# Build and generated output
 .cache/
-dist/
-build/
-*.egg-info/
 outputs/
-runs/
 wandb/
-logs/
 *.log
-RESULTS_SFT/
-RESULTS_PUBLISHED/
-RESULTS_EXPLORATORY/
-
-# Editors and operating systems
-.idea/
-.vscode/
-*.swp
-*.swo
-.DS_Store
-
-# Secrets
-.env
-*.key

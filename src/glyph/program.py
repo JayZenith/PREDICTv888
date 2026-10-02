@@ -2,9 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["openai==2.32.0"]
 # ///
-"""Sandbox-side PREDICT agent loop for Python function tasks.
-Parse actions, exec tools, run verifier, enforce Arm B's protocol, write rollout trace
-"""
+"""Sandbox-side PREDICT agent loop for Python function tasks."""
 
 from __future__ import annotations
 
@@ -121,7 +119,6 @@ def parse_prediction_decision(
     return prediction, decision, errors
 
 
-# Make Arm B emit exactly 3 lines when candidate is pending: pred, decision, one tool call
 def validate_turn_shape(
     text: str,
     calls: list[Call],
@@ -178,10 +175,7 @@ def _failed_outcome(stderr: str, timed_out: bool = False) -> str:
         return RUNTIME_ERROR
     return OTHER
 
-# copies curr solution.py plus tests into temp dir, run in subprocess,
-# kills whole process group on timeout, map execution into six outcome classes
-# Uses random success m arker written to real stdout so candidate cannot simply
-# exit zero and fool verifier
+
 def run_hidden_tests(project: Path, test_code: str, timeout: int) -> Result:
     solution = project / "solution.py"
     if not solution.is_file():
@@ -283,7 +277,7 @@ def result_block(call_id: str, result: Result) -> str:
 def _candidate_sha256(root: Path) -> str:
     return hashlib.sha256((root / "solution.py").read_bytes()).hexdigest()
 
-# prediction_target object contains the sampled prediction and real verifier label
+
 def _prediction_target(
     *,
     candidate_call_id: str,

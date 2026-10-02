@@ -145,18 +145,6 @@ class GlyphTask(vf.Task[GlyphTaskData, vf.State, GlyphTaskConfig]):
     async def passed(self, trace: vf.Trace) -> float:
         return float(self._evaluate(trace)[1])
 
-    @vf.metric
-    async def first_patch_correct(self, trace: vf.Trace) -> float:
-        calls, results, predictions = self._state(trace)
-        if predictions:
-            return float(predictions[0].get("actual") == "PASS")
-        first_test = next(
-            (call for call in calls if call.get("tool") == "python_test"), None
-        )
-        return float(
-            bool(first_test)
-            and bool((results.get(first_test.get("id")) or {}).get("success"))
-        )
 
     @vf.metric
     async def prediction_accuracy(self, trace: vf.Trace) -> float:
@@ -188,42 +176,9 @@ class GlyphTask(vf.Task[GlyphTaskData, vf.State, GlyphTaskConfig]):
             else 0.0
         )
 
-    @vf.metric
-    async def recovered_after_executed_failure(self, trace: vf.Trace) -> float:
-        calls, results, _ = self._state(trace)
-        outcomes = [
-            bool((results.get(call.get("id")) or {}).get("success"))
-            for call in calls
-            if call.get("tool") == "python_test"
-        ]
-        first_failure = next(
-            (index for index, passed in enumerate(outcomes) if not passed),
-            None,
-        )
-        return float(
-            first_failure is not None and any(outcomes[first_failure + 1 :])
-        )
 
-    @vf.metric
-    async def had_executed_failure(self, trace: vf.Trace) -> float:
-        calls, results, _ = self._state(trace)
-        return float(
-            any(
-                not bool((results.get(call.get("id")) or {}).get("success"))
-                for call in calls
-                if call.get("tool") == "python_test"
-            )
-        )
 
-    @vf.metric
-    async def visible_test_calls(self, trace: vf.Trace) -> float:
-        calls, _, _ = self._state(trace)
-        return float(sum(call.get("tool") == "python_test" for call in calls))
 
-    @vf.metric
-    async def visible_tool_calls(self, trace: vf.Trace) -> float:
-        calls, _, _ = self._state(trace)
-        return float(len(calls))
 
 
 class GlyphTasksetConfig(vf.TasksetConfig):
