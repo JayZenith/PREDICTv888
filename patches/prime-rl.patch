@@ -1,0 +1,174 @@
+diff --git a/src/prime_rl/orchestrator/orchestrator.py b/src/prime_rl/orchestrator/orchestrator.py
+index 77f85c0..87d28ee 100644
+--- a/src/prime_rl/orchestrator/orchestrator.py
++++ b/src/prime_rl/orchestrator/orchestrator.py
+@@ -493,6 +493,12 @@ class Orchestrator:
+                 get_trace_path(self.config.output_dir, step, rollout.kind, "all"),
+             )
+-
++
++            if rollout.kind == "train" and rollout.is_truncated:
++                get_logger().warning(
++                    "dropping truncated training rollout before the trainer: "
++                    f"task={rollout.task.data.idx} stop={rollout.stop_condition}"
++                )
++
+             if rollout.kind == "eval":
+                 assert self.eval_sink is not None  # eval rollouts only emitted when eval is configured
+                 eval_batch = self.eval_sink.add(rollout)
+diff --git a/packages/prime-rl-configs/src/prime_rl/configs/trainer.py b/packages/prime-rl-configs/src/prime_rl/configs/trainer.py
+index 8f790c2..da35b1f 100644
+--- a/packages/prime-rl-configs/src/prime_rl/configs/trainer.py
++++ b/packages/prime-rl-configs/src/prime_rl/configs/trainer.py
+@@ -281,6 +281,9 @@ class TokenizerConfig(BaseConfig):
+     chat_template: str | None = None
+     """Chat template for the tokenizer. Either a Jinja2 template string or a path to a template file. If None, the tokenizer's default chat template is used."""
+ 
++    eos_token: str | None = None
++    """Existing vocabulary token to use as EOS for training and exported checkpoints."""
++
+ 
+ class ConstantSchedulerConfig(BaseConfig):
+     type: Literal["constant"] = "constant"
+diff --git a/src/prime_rl/trainer/model.py b/src/prime_rl/trainer/model.py
+index a37aca1..031623b 100644
+--- a/src/prime_rl/trainer/model.py
++++ b/src/prime_rl/trainer/model.py
+@@ -647,7 +647,7 @@ def get_model(
+     return model
+ 
+ 
+-def setup_tokenizer(config: TokenizerConfig) -> PreTrainedTokenizer:
++def setup_tokenizer(config: TokenizerConfig, model=None) -> PreTrainedTokenizer:
+     logger = get_logger()
+     tokenizer = AutoTokenizer.from_pretrained(config.name, trust_remote_code=config.trust_remote_code)
+     if config.chat_template is not None:
+@@ -659,7 +659,17 @@ def setup_tokenizer(config: TokenizerConfig) -> PreTrainedTokenizer:
+         else:
+             logger.info("Using inline custom chat template")
+             tokenizer.chat_template = config.chat_template
++    if config.eos_token is not None:
++        if config.eos_token not in tokenizer.get_vocab():
++            raise ValueError(f"EOS token {config.eos_token!r} is not in the tokenizer vocabulary")
++        tokenizer.eos_token = config.eos_token
+     tokenizer.pad_token_id = tokenizer.eos_token_id
++    if model is not None:
++        model.config.eos_token_id = tokenizer.eos_token_id
++        model.config.pad_token_id = tokenizer.pad_token_id
++        if model.generation_config is not None:
++            model.generation_config.eos_token_id = tokenizer.eos_token_id
++            model.generation_config.pad_token_id = tokenizer.pad_token_id
+ 
+     return tokenizer
+ 
+diff --git a/src/prime_rl/trainer/rl/train.py b/src/prime_rl/trainer/rl/train.py
+index 5bd015c..f8c3a3f 100644
+--- a/src/prime_rl/trainer/rl/train.py
++++ b/src/prime_rl/trainer/rl/train.py
+@@ -150,7 +150,7 @@ def train(config: TrainerConfig):
+     model = setup_model(config.model, parallel_dims, loading_from_ckpt_later)
+ 
+     logger.info(f"Initializing tokenizer ({config.tokenizer})")
+-    tokenizer = setup_tokenizer(config.tokenizer)
++    tokenizer = setup_tokenizer(config.tokenizer, model)
+ 
+     # Set up the loss function for the RL loss type (ce / ref_kl are fixed)
+     logger.info(f"Setting up loss function ({config.loss})")
+diff --git a/src/prime_rl/trainer/sft/train.py b/src/prime_rl/trainer/sft/train.py
+index 2abb73e..aa2b2b8 100644
+--- a/src/prime_rl/trainer/sft/train.py
++++ b/src/prime_rl/trainer/sft/train.py
+@@ -160,7 +160,7 @@ def train(config: SFTConfig):
+         multi_run_manager.scaling_factors[0] = config.model.lora.alpha / config.model.lora.rank
+ 
+     logger.info(f"Initializing tokenizer ({config.tokenizer})")
+-    tokenizer = setup_tokenizer(config.tokenizer)
++    tokenizer = setup_tokenizer(config.tokenizer, model)
+ 
+     renderer = None
+     if config.renderer is not None:
+diff --git a/packages/prime-rl-configs/src/prime_rl/configs/algorithm.py b/packages/prime-rl-configs/src/prime_rl/configs/algorithm.py
+index b328247..817448e 100644
+--- a/packages/prime-rl-configs/src/prime_rl/configs/algorithm.py
++++ b/packages/prime-rl-configs/src/prime_rl/configs/algorithm.py
+@@ -217,6 +217,28 @@ class EchoAlgoConfig(GRPOAlgoConfig):
+     """Optional user-supplied filter narrowing the role-selected tokens."""
+ 
+ 
++class PredictAlgoConfig(GRPOAlgoConfig):
++    type: Literal["predict"] = "predict"  # type: ignore[assignment]
++    """PREDICT: GRPO on agent actions plus verified-label CE on hidden
++    pre-execution consequence targets supplied by the environment. Unlike
++    ``echo``, whose CE reweights observation tokens already present in the
++    rollout, the target here is a label the rollout never contained — the
++    sandbox's verified outcome, rendered onto the pre-execution context as a
++    separate auxiliary sample."""
++
++    alpha: float = Field(0.1, gt=0)
++    """Weight of verified-label cross-entropy relative to mean GRPO loss."""
++
++    max_aux_tokens: int = Field(4096, ge=1)
++    """Hard limit for each corrected-label auxiliary sequence."""
++
++    renderer: RendererConfig = AutoRendererConfig()
++    """Renderer for the auxiliary sample's context prefix. The tokenizer is
++    always the live policy's. Defaults to ``"auto"`` (resolved from the policy
++    tokenizer); set explicitly to match a non-auto policy renderer, or the
++    auxiliary prefix tokenizes differently from the rollout it corrects."""
++
++
+ class MaxRLAlgoConfig(BaseAlgoConfig):
+     type: Literal["max_rl"] = "max_rl"
+     """MaxRL (arXiv:2602.02710): scalar advantage = (reward − group mean) /
+@@ -305,7 +327,13 @@ class SFTAlgoConfig(BaseAlgoConfig):
+ 
+ 
+ AlgoConfig: TypeAlias = Annotated[
+-    GRPOAlgoConfig | EchoAlgoConfig | MaxRLAlgoConfig | OPDAlgoConfig | OPSDAlgoConfig | SFTAlgoConfig,
++    GRPOAlgoConfig
++    | EchoAlgoConfig
++    | PredictAlgoConfig
++    | MaxRLAlgoConfig
++    | OPDAlgoConfig
++    | OPSDAlgoConfig
++    | SFTAlgoConfig,
+     Field(discriminator="type"),
+ ]
+ """The training algorithm: sampling plus the per-token training signal (credit
+@@ -318,6 +346,7 @@ its class defaults are the vetted setting.
+ - ``opsd`` — SDFT: policy samples, demo-conditioned reverse KL against the live policy (the teacher is the policy itself).
+ - ``sft`` — a frozen model samples, the policy trains with CE on its tokens. Needs a frozen ``sampling.source``.
+ - ``echo`` — GRPO on action tokens + weighted CE on tool-response observation tokens.
++- ``predict`` — GRPO actions + verified-label CE on pre-execution predictions.
+ 
+ A new credit-assignment scheme is a new named algorithm in code (subclass
+ ``Algorithm``, register it), not a config that points at an import path.
+diff --git a/src/prime_rl/orchestrator/algo/__init__.py b/src/prime_rl/orchestrator/algo/__init__.py
+index 8d1baa6..2040119 100644
+--- a/src/prime_rl/orchestrator/algo/__init__.py
++++ b/src/prime_rl/orchestrator/algo/__init__.py
+@@ -38,6 +38,8 @@ from prime_rl.orchestrator.algo.routing import stamp_advantages, stamp_loss_rout
+ from prime_rl.orchestrator.algo.sft import SFTDistillAlgorithm
+ from prime_rl.orchestrator.types import Rollout
+ 
++from glyph.prime_rl import PredictAlgorithm
++
+ if TYPE_CHECKING:
+     from prime_rl.configs.algorithm import AlgoConfig
+     from prime_rl.utils.client import InferencePool
+@@ -47,6 +49,7 @@ if TYPE_CHECKING:
+ ALGORITHM_CLASSES: dict[str, type[Algorithm]] = {
+     "grpo": GRPOAlgorithm,
+     "echo": EchoAlgorithm,
++    "predict": PredictAlgorithm,
+     "max_rl": MaxRLAlgorithm,
+     "opd": OPDAlgorithm,
+     "opsd": OPSDAlgorithm,
+@@ -72,6 +75,7 @@ __all__ = [
+     "MaxRLAlgorithm",
+     "OPDAlgorithm",
+     "OPSDAlgorithm",
++    "PredictAlgorithm",
+     "Rollout",
+     "SFTDistillAlgorithm",
+     "build_algorithm",

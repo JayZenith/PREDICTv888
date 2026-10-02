@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-import io
 import json
-import tarfile
 from pathlib import Path
 
 import verifiers.v1 as vf
@@ -42,7 +39,7 @@ def load_rows(data_path: str, max_samples: int | None = None) -> list[dict]:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise ValueError(f"{path}:{line_no}: invalid JSON: {exc.msg}") from exc
-            required = {"case_id", "prompt", "blueprint_root", "test_code"}
+            required = {"case_id", "prompt", "trace_prefix", "test_code"}
             if not isinstance(row, dict) or not required <= row.keys():
                 raise ValueError(f"{path}:{line_no}: missing required task fields")
             if not isinstance(row["prompt"], list):
@@ -56,7 +53,6 @@ class GlyphTaskData(vf.TaskData):
     case_id: str
     source: str = "mbpp"
     source_task_id: int
-    blueprint_root: str
     trace_prefix: str
     test_code: str
 
@@ -65,27 +61,13 @@ class GlyphTaskConfig(vf.TaskConfig):
     max_trace_tokens: int = 4096
 
 
-def _archive_blueprint(source: Path, trace_prefix: str) -> bytes:
-    source = source.resolve(strict=True)
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-        archive.add(source, arcname=trace_prefix, recursive=True)
-    return buffer.getvalue()
+PLACEHOLDER = b"# Write your function here.\n"
 
 
 class GlyphTask(vf.Task[GlyphTaskData, vf.State, GlyphTaskConfig]):
     async def setup(self, trace: vf.Trace, runtime: vf.Runtime) -> None:
-        payload = await asyncio.to_thread(
-            _archive_blueprint, Path(self.data.blueprint_root), self.data.trace_prefix
-        )
-        await runtime.write(".glyph/task.tar.gz", payload)
+        await runtime.write(f"{self.data.trace_prefix}/solution.py", PLACEHOLDER)
         await runtime.write(".glyph/tests.py", self.data.test_code.encode("utf-8"))
-        result = await runtime.run(
-            ["tar", "-xzf", ".glyph/task.tar.gz", "--no-same-owner", "--no-same-permissions"],
-            {},
-        )
-        if result.exit_code != 0:
-            raise vf.SandboxError(f"could not materialize Python task: {result.stderr.strip()}")
 
     async def finalize(self, trace: vf.Trace, runtime: vf.Runtime) -> None:
         if reason := self._truncation_reason(trace):
@@ -250,11 +232,6 @@ class GlyphTasksetConfig(vf.TasksetConfig):
     task: GlyphTaskConfig = GlyphTaskConfig()
 
 
-def _blueprint_path(value: str, root: Path) -> Path:
-    path = Path(value).expanduser()
-    return path.resolve(strict=True) if path.is_absolute() else (root / path).resolve(strict=True)
-
-
 class GlyphTaskset(vf.Taskset[GlyphTask, GlyphTasksetConfig]):
     def load(self) -> list[GlyphTask]:
         if not self.config.data_path:
@@ -273,8 +250,7 @@ class GlyphTaskset(vf.Taskset[GlyphTask, GlyphTasksetConfig]):
                         case_id=row["case_id"],
                         source=row.get("source", "mbpp"),
                         source_task_id=int(row.get("task_id", idx)),
-                        blueprint_root=str(_blueprint_path(row["blueprint_root"], data_path.parent)),
-                        trace_prefix=row.get("trace_prefix") or row["blueprint_root"],
+                        trace_prefix=row["trace_prefix"],
                         test_code=row["test_code"],
                     ),
                     self.config.task,

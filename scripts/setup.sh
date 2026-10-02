@@ -1,53 +1,45 @@
 #!/usr/bin/env bash
+# Reproducible setup: pinned PRIME-RL + prebuilt wheels (torch 2.11+cu128,
+# vllm 0.24.0+cu129, flash-attn 2.8.3 cu128/torch2.11). Nothing compiles.
+# Needs Linux x86_64, NVIDIA driver >= 570 (CUDA 12.9). Tested target: 2x RTX 3090.
 set -euo pipefail
-
 cd "$(dirname "$0")/.."
 
+readonly UV_VERSION="0.11.29"
 readonly PRIME_RL_COMMIT="d334ea52940b47f426293a7d146239e3fbf91caa"
 readonly VERIFIERS_COMMIT="6c64ce6a3a01e8edde7c3c0e8e5315fb236e9faa"
 readonly PRIME_DIR=".vendor/prime-rl"
 
-command -v uv >/dev/null || { echo "uv is required: https://docs.astral.sh/uv/" >&2; exit 1; }
+if [[ "$(uv --version 2>/dev/null | cut -d' ' -f2)" != "$UV_VERSION" ]]; then
+  curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | env UV_NO_MODIFY_PATH=1 sh
+  export PATH="$HOME/.local/bin:$PATH"
+fi
 
 if [[ ! -d "$PRIME_DIR/.git" ]]; then
-  mkdir -p "$PRIME_DIR"
-  git -C "$PRIME_DIR" init
+  git init -q "$PRIME_DIR"
   git -C "$PRIME_DIR" remote add origin https://github.com/PrimeIntellect-ai/prime-rl.git
 fi
-if ! git -C "$PRIME_DIR" cat-file -e "${PRIME_RL_COMMIT}^{commit}" 2>/dev/null; then
-  git -C "$PRIME_DIR" fetch --depth=1 origin "$PRIME_RL_COMMIT"
-fi
-git -C "$PRIME_DIR" checkout --detach "$PRIME_RL_COMMIT"
-# Upstream pins public submodules with SSH URLs. Fresh training instances do not
-# need GitHub SSH credentials, so override those URLs locally with HTTPS.
-git -C "$PRIME_DIR" config submodule.renderers.url \
-  https://github.com/PrimeIntellect-ai/renderers.git
-git -C "$PRIME_DIR" config submodule.research-environments.url \
-  https://github.com/PrimeIntellect-ai/research-environments.git
-git -C "$PRIME_DIR" config submodule.verifiers.url \
-  https://github.com/PrimeIntellect-ai/verifiers.git
-git -C "$PRIME_DIR" submodule update --init --depth=1 \
-  deps/verifiers deps/renderers deps/pydantic-config deps/research-environments
-
-for patch in \
-  "$PWD/patches/prime-rl-warn-on-truncation.patch" \
-  "$PWD/patches/prime-rl-eos-token.patch" \
-  "$PWD/patches/prime-rl-predict.patch"
-do
-  if ! git -C "$PRIME_DIR" apply --reverse --check "$patch" 2>/dev/null; then
-    git -C "$PRIME_DIR" apply --check "$patch"
-    git -C "$PRIME_DIR" apply "$patch"
-  fi
+git -C "$PRIME_DIR" cat-file -e "${PRIME_RL_COMMIT}^{commit}" 2>/dev/null \
+  || git -C "$PRIME_DIR" fetch -q --depth=1 origin "$PRIME_RL_COMMIT"
+git -C "$PRIME_DIR" checkout -q --detach "$PRIME_RL_COMMIT"
+for sub in renderers research-environments verifiers; do
+  git -C "$PRIME_DIR" config "submodule.$sub.url" "https://github.com/PrimeIntellect-ai/$sub.git"
 done
-
+git -C "$PRIME_DIR" submodule update -q --init --depth=1 \
+  deps/verifiers deps/renderers deps/pydantic-config deps/research-environments
 test "$(git -C "$PRIME_DIR/deps/verifiers" rev-parse HEAD)" = "$VERIFIERS_COMMIT"
+
+patch="$PWD/patches/prime-rl.patch"
+git -C "$PRIME_DIR" apply --reverse --check "$patch" 2>/dev/null \
+  || git -C "$PRIME_DIR" apply "$patch"
+
 uv sync --locked
-
-uv sync --project "$PRIME_DIR" --extra flash-attn --no-build-package flash-attn
+uv sync --locked --project "$PRIME_DIR" --extra flash-attn --no-build-package flash-attn
 uv run --project "$PRIME_DIR" --extra flash-attn python - <<'PY'
-import flash_attn
-
-print("flash-attn", flash_attn.__version__)
+import flash_attn, torch, vllm
+assert torch.cuda.is_available()
+print("torch", torch.__version__, "vllm", vllm.__version__, "flash-attn", flash_attn.__version__)
+for i in range(torch.cuda.device_count()):
+    print(i, torch.cuda.get_device_name(i), torch.cuda.get_device_capability(i))
 PY
-
-echo "PREDICT is ready. PRIME-RL training dependencies are synced with the prebuilt flash-attn wheel."
+echo "ready"
