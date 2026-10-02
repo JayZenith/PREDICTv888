@@ -3,7 +3,9 @@
 The base model barely trained <|im_end|>; its embedding norm is ~0.4 against ~1.5-1.9
 for ordinary tokens. Embeddings are tied to the LM head, so the token's logit stays near
 zero and SFT cannot raise it: sampled turns run past the end instead of stopping.
-Copying the <|endoftext|> row (a trained stop token) fixes the starting point.
+Swapping the <|im_end|> and <|endoftext|> rows fixes the starting point: <|im_end|>
+gets a trained stop-token row, and <|endoftext|>, which the chat format never uses,
+gets the weak one, so the two do not compete at the end of each turn.
 """
 
 import sys
@@ -20,7 +22,7 @@ assert model.config.tie_word_embeddings
 embed = model.get_input_embeddings().weight
 im_end, endoftext = tokenizer.convert_tokens_to_ids(["<|im_end|>", "<|endoftext|>"])
 with torch.no_grad():
-    embed[im_end] = embed[endoftext]
+    embed[[im_end, endoftext]] = embed[[endoftext, im_end]]
 model.save_pretrained(out)
 tokenizer.save_pretrained(out)
 print(f"wrote {out}")
