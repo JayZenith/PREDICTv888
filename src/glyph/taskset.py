@@ -136,9 +136,10 @@ class GlyphTask(vf.Task[GlyphTaskData, vf.State, GlyphTaskConfig]):
     async def passed(self, trace: vf.Trace) -> float:
         return float(self._evaluate(trace)[1])
 
-    @vf.metric
+    @vf.reward(weight=0.2)
     async def prediction_accuracy(self, trace: vf.Trace) -> float:
-        """Fraction of predicted test values that match the executed candidate."""
+        """Fraction of predicted test values that match the executed candidate.
+        Always 0 for Arm A, which makes no predictions."""
         targets = (trace.info.get("glyph") or {}).get("prediction_targets") or []
         lines = [
             (target["predicted"][i] if i < len(target["predicted"]) else None) == actual
