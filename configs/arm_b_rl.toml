@@ -1,4 +1,4 @@
-# Arm B: matched GRPO plus verified-label prediction CE.
+# Arm B: GRPO with value predictions after each patch.
 max_steps = 100
 seq_len = 4096
 output_dir = "outputs/arm_b_rl"
@@ -13,25 +13,14 @@ eos_token = "<|im_end|>"
 [wandb]
 project = "predict-mbpp-1.7b"
 group = "matched-arms"
-name = "arm-b-predict"
+name = "arm-b-grpo"
 
 [orchestrator]
 batch_size = 64
 group_size = 16
 
-[orchestrator.model.client]
-base_url = ["http://localhost:8001/v1"]
-
 [orchestrator.algo]
-type = "predict"
-alpha = 0.1
-max_aux_tokens = 4096
-
-# Must match [orchestrator.renderer]: the auxiliary sample's context prefix is
-# rendered by the algorithm's own renderer, and it has to tokenize the way the
-# rollout it corrects did. "auto" would resolve to qwen3 and silently diverge.
-[orchestrator.algo.renderer]
-name = "default"
+type = "grpo"
 
 [orchestrator.renderer]
 name = "default"
@@ -88,9 +77,6 @@ weights_only = true
 [inference]
 gpu_memory_utilization = 0.85
 seed = 42
-
-[inference.server]
-port = 8001
 
 [weight_broadcast]
 type = "filesystem"

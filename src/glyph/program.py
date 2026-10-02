@@ -7,9 +7,8 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import asyncio
-import copy
-import hashlib
 import json
 import os
 import re
@@ -29,17 +28,13 @@ RUNTIME_ERROR = "RUNTIME_ERROR"
 SYNTAX_ERROR = "SYNTAX_ERROR"
 TIMEOUT = "TIMEOUT"
 OTHER = "OTHER"
-OUTCOME_CLASSES = frozenset(
-    {PASS, ASSERTION_FAILURE, RUNTIME_ERROR, SYNTAX_ERROR, TIMEOUT, OTHER}
-)
-DECISIONS = frozenset({"KEEP", "REVISE"})
 SUPPORTED_TOOLS = frozenset({"read_file", "apply_patch", "python_test"})
 IM_END_TOKEN_ID = 151645
 TOOL_NAME_RE = re.compile(r"^[A-Za-z_]\w*$")
-PREDICTION_RE = re.compile(
-    r"<PREDICTION>\s*([A-Z_]+)\s*</PREDICTION>", re.DOTALL
+PREDICTION_TURN_RE = re.compile(
+    r"<PREDICTION>\n(.+)\n</PREDICTION>\n(CALL [^\n]+)", re.DOTALL
 )
-DECISION_RE = re.compile(r"<DECISION>\s*([A-Z_]+)\s*</DECISION>", re.DOTALL)
+VALUE_TIMEOUT = 5
 
 
 @dataclass(frozen=True)
@@ -100,25 +95,6 @@ def parse_calls(
     return calls, errors
 
 
-def parse_prediction_decision(
-    text: str,
-) -> tuple[str | None, str | None, list[str]]:
-    predictions = PREDICTION_RE.findall(text)
-    decisions = DECISION_RE.findall(text)
-    errors: list[str] = []
-    prediction = predictions[0] if len(predictions) == 1 else None
-    decision = decisions[0] if len(decisions) == 1 else None
-    if len(predictions) != 1:
-        errors.append("Arm B requires exactly one PREDICTION")
-    elif prediction not in OUTCOME_CLASSES:
-        errors.append(f"unknown prediction outcome: {prediction}")
-    if len(decisions) != 1:
-        errors.append("Arm B requires exactly one DECISION")
-    elif decision not in DECISIONS:
-        errors.append(f"unknown decision: {decision}")
-    return prediction, decision, errors
-
-
 def validate_turn_shape(
     text: str,
     calls: list[Call],
@@ -135,16 +111,8 @@ def validate_turn_shape(
         return ["assistant turn requires exactly one CALL"]
     call_lines = [line for line in lines if line.startswith("CALL ")]
     if arm == "b" and pending_candidate:
-        if (
-            len(lines) != 3
-            or len(call_lines) != 1
-            or not PREDICTION_RE.fullmatch(lines[0])
-            or not DECISION_RE.fullmatch(lines[1])
-            or lines[2] != call_lines[0]
-        ):
-            return [
-                "Arm B prediction turn requires PREDICTION, DECISION, and one CALL"
-            ]
+        if not PREDICTION_TURN_RE.fullmatch(text.strip()):
+            return ["Arm B turn after a patch requires a PREDICTION block, then one CALL"]
         return []
     if len(lines) != 1 or len(call_lines) != 1:
         return ["CALL turn cannot contain additional text"]
@@ -274,31 +242,71 @@ def result_block(call_id: str, result: Result) -> str:
     return f"RESULT {call_id}:\n" + "\n".join(lines)
 
 
-def _candidate_sha256(root: Path) -> str:
-    return hashlib.sha256((root / "solution.py").read_bytes()).hexdigest()
+VALUE_SCRIPT = r"""
+import ast, sys
+source = open(sys.argv[1], encoding="utf-8").read()
+tests = ast.parse(open(sys.argv[2], encoding="utf-8").read())
+index = int(sys.argv[3])
+namespace = {"__name__": "solution"}
+try:
+    exec(compile(source, "solution.py", "exec"), namespace)
+    asserts = 0
+    for node in tests.body:
+        if not isinstance(node, ast.Assert):
+            exec(compile(ast.Module(body=[node], type_ignores=[]), "tests", "exec"), namespace)
+            continue
+        if asserts == index:
+            test = node.test
+            if isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq):
+                value = repr(eval(compile(ast.Expression(test.left), "tests", "eval"), namespace))
+            else:
+                value = repr(bool(eval(compile(ast.Expression(test), "tests", "eval"), namespace)))
+            break
+        asserts += 1
+except BaseException as exc:
+    value = "raises " + type(exc).__name__
+sys.__stdout__.write("\n" + value + "\n")
+"""
 
 
-def _prediction_target(
-    *,
-    candidate_call_id: str,
-    context_messages: list[dict],
-    sampled_prediction: str | None,
-    decision: str | None,
-    result: Result,
-    shadow: bool,
-    root: Path,
-) -> dict:
-    if result.outcome not in OUTCOME_CLASSES:
-        raise RuntimeError("candidate test did not produce an outcome class")
-    return {
-        "candidate_call_id": candidate_call_id,
-        "context_messages": context_messages,
-        "sampled_prediction": sampled_prediction,
-        "actual": result.outcome,
-        "decision": decision,
-        "shadow": shadow,
-        "candidate_sha256": _candidate_sha256(root),
+def actual_values(project: Path, test_file: Path) -> list[str]:
+    """What the current solution returns on each assert's call, in SFT format."""
+    count = sum(isinstance(node, ast.Assert) for node in ast.parse(test_file.read_text()).body)
+    solution = (project / "solution.py").resolve()
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "LANG": "C.UTF-8",
+        "HOME": "/tmp",
+        "PYTHONDONTWRITEBYTECODE": "1",
     }
+    values = []
+    with tempfile.TemporaryDirectory(prefix="predict-values-") as cwd:
+        for index in range(count):
+            process = subprocess.Popen(
+                ["python3", "-B", "-c", VALUE_SCRIPT, str(solution), str(test_file.resolve()), str(index)],
+                cwd=cwd,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            try:
+                stdout, _ = process.communicate(timeout=VALUE_TIMEOUT)
+                values.append(stdout.rstrip("\n").rsplit("\n", 1)[-1])
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.communicate()
+                values.append("times out")
+    return values
+
+
+def predicted_values(text: str) -> list[str]:
+    lines = PREDICTION_TURN_RE.fullmatch(text.strip()).group(1).splitlines()
+    return [
+        line.split(" = ", 1)[-1].rpartition(", expected ")[0] or line.split(" = ", 1)[-1]
+        for line in lines
+    ]
 
 
 def parse_args() -> argparse.Namespace:
@@ -352,7 +360,6 @@ async def main() -> None:
 
     try:
         while True:
-            context_messages = copy.deepcopy(messages)
             assistant = await complete()
             messages.append({"role": "assistant", "content": assistant})
             calls, parse_errors = parse_calls(
@@ -368,90 +375,27 @@ async def main() -> None:
                 pending_candidate=pending_candidate is not None,
             )
             errors.extend(shape_errors)
-            if shape_errors:
+            if shape_errors or not calls:
                 break
 
             if args.arm == "b" and pending_candidate is not None:
-                prediction, decision, protocol_errors = parse_prediction_decision(
-                    assistant
+                prediction_targets.append(
+                    {
+                        "candidate_call_id": pending_candidate,
+                        "predicted": predicted_values(assistant),
+                        "actual": actual_values(root, Path(args.test_file)),
+                    }
                 )
-                expected = "python_test" if decision == "KEEP" else "apply_patch"
-                if decision in DECISIONS and calls[0].tool != expected:
-                    protocol_errors.append(
-                        f"{decision} requires CALL {expected}, got {calls[0].tool}"
-                    )
-                if len(executed) >= args.max_tool_calls:
-                    protocol_errors.append("visible tool-call budget exhausted")
 
-                if protocol_errors:
-                    errors.extend(protocol_errors)
-                    shadow = run_hidden_tests(root, test_code, args.tool_timeout)
-                    prediction_targets.append(
-                        _prediction_target(
-                            candidate_call_id=pending_candidate,
-                            context_messages=context_messages,
-                            sampled_prediction=prediction,
-                            decision=decision,
-                            result=shadow,
-                            shadow=True,
-                            root=root,
-                        )
-                    )
-                    break
-
-                call = calls[0]
-                if decision == "REVISE":
-                    shadow = run_hidden_tests(root, test_code, args.tool_timeout)
-                    prediction_targets.append(
-                        _prediction_target(
-                            candidate_call_id=pending_candidate,
-                            context_messages=context_messages,
-                            sampled_prediction=prediction,
-                            decision=decision,
-                            result=shadow,
-                            shadow=True,
-                            root=root,
-                        )
-                    )
-                    result = execute_tool(call, root, test_code, args.tool_timeout)
-                    append_result(call, result)
-                    pending_candidate = call.id if result.success else None
-                else:
-                    result = execute_tool(call, root, test_code, args.tool_timeout)
-                    prediction_targets.append(
-                        _prediction_target(
-                            candidate_call_id=pending_candidate,
-                            context_messages=context_messages,
-                            sampled_prediction=prediction,
-                            decision=decision,
-                            result=result,
-                            shadow=False,
-                            root=root,
-                        )
-                    )
-                    append_result(call, result)
-                    pending_candidate = None
-                continue
-
-            if not calls:
-                break
-
-            remaining = args.max_tool_calls - len(executed)
-            if remaining <= 0:
+            if len(executed) >= args.max_tool_calls:
                 errors.append("visible tool-call budget exhausted")
                 break
-            for call in calls[:remaining]:
-                if args.arm == "b" and call.tool == "python_test":
-                    errors.append(
-                        "Arm B must predict and choose KEEP before python_test"
-                    )
-                    break
-                result = execute_tool(call, root, test_code, args.tool_timeout)
-                append_result(call, result)
-                if args.arm == "b" and call.tool == "apply_patch" and result.success:
-                    pending_candidate = call.id
-            if errors:
-                break
+            call = calls[0]
+            result = execute_tool(call, root, test_code, args.tool_timeout)
+            append_result(call, result)
+            if args.arm == "b":
+                applied = call.tool == "apply_patch" and result.success
+                pending_candidate = call.id if applied else None
     finally:
         await client.close()
 

@@ -128,15 +128,6 @@ class GlyphTask(vf.Task[GlyphTaskData, vf.State, GlyphTaskConfig]):
         trace.info["glyph_evaluation"] = evaluation
         return evaluation
 
-    @staticmethod
-    def _state(trace: vf.Trace) -> tuple[list[dict], dict[str, dict], list[dict]]:
-        state = trace.info.get("glyph") or {}
-        return (
-            list(state.get("calls") or []),
-            dict(state.get("results") or {}),
-            list(state.get("prediction_targets") or []),
-        )
-
     @vf.reward(weight=1.0)
     async def mbpp_reward(self, trace: vf.Trace) -> float:
         return self._evaluate(trace)[0]
@@ -145,40 +136,16 @@ class GlyphTask(vf.Task[GlyphTaskData, vf.State, GlyphTaskConfig]):
     async def passed(self, trace: vf.Trace) -> float:
         return float(self._evaluate(trace)[1])
 
-
     @vf.metric
     async def prediction_accuracy(self, trace: vf.Trace) -> float:
-        _, _, predictions = self._state(trace)
-        if not predictions:
-            return 0.0
-        return sum(
-            item.get("sampled_prediction") == item.get("actual")
-            for item in predictions
-        ) / len(predictions)
-
-    @vf.metric
-    async def bad_patch_rejection_rate(self, trace: vf.Trace) -> float:
-        _, _, predictions = self._state(trace)
-        bad = [item for item in predictions if item.get("actual") != "PASS"]
-        return (
-            sum(item.get("decision") == "REVISE" for item in bad) / len(bad)
-            if bad
-            else 0.0
-        )
-
-    @vf.metric
-    async def unnecessary_rejection_rate(self, trace: vf.Trace) -> float:
-        _, _, predictions = self._state(trace)
-        good = [item for item in predictions if item.get("actual") == "PASS"]
-        return (
-            sum(item.get("decision") == "REVISE" for item in good) / len(good)
-            if good
-            else 0.0
-        )
-
-
-
-
+        """Fraction of predicted test values that match the executed candidate."""
+        targets = (trace.info.get("glyph") or {}).get("prediction_targets") or []
+        lines = [
+            (target["predicted"][i] if i < len(target["predicted"]) else None) == actual
+            for target in targets
+            for i, actual in enumerate(target["actual"])
+        ]
+        return sum(lines) / len(lines) if lines else 0.0
 
 
 class GlyphTasksetConfig(vf.TasksetConfig):
