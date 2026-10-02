@@ -10,6 +10,8 @@ readonly PRIME_RL_COMMIT="d334ea52940b47f426293a7d146239e3fbf91caa"
 readonly VERIFIERS_COMMIT="6c64ce6a3a01e8edde7c3c0e8e5315fb236e9faa"
 readonly PRIME_DIR=".vendor/prime-rl"
 
+retry() { for i in 1 2 3 4 5; do "$@" && return; echo "retry $i: $*" >&2; sleep 10; done; return 1; }
+
 if [[ "$(uv --version 2>/dev/null | cut -d' ' -f2)" != "$UV_VERSION" ]]; then
   curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | env UV_NO_MODIFY_PATH=1 sh
   export PATH="$HOME/.local/bin:$PATH"
@@ -20,12 +22,12 @@ if [[ ! -d "$PRIME_DIR/.git" ]]; then
   git -C "$PRIME_DIR" remote add origin https://github.com/PrimeIntellect-ai/prime-rl.git
 fi
 git -C "$PRIME_DIR" cat-file -e "${PRIME_RL_COMMIT}^{commit}" 2>/dev/null \
-  || git -C "$PRIME_DIR" fetch -q --depth=1 origin "$PRIME_RL_COMMIT"
+  || retry git -C "$PRIME_DIR" fetch -q --depth=1 origin "$PRIME_RL_COMMIT"
 git -C "$PRIME_DIR" checkout -q --detach "$PRIME_RL_COMMIT"
 for sub in renderers research-environments verifiers; do
   git -C "$PRIME_DIR" config "submodule.$sub.url" "https://github.com/PrimeIntellect-ai/$sub.git"
 done
-git -C "$PRIME_DIR" submodule update -q --init --depth=1 \
+retry git -C "$PRIME_DIR" submodule update -q --init --depth=1 \
   deps/verifiers deps/renderers deps/pydantic-config deps/research-environments
 test "$(git -C "$PRIME_DIR/deps/verifiers" rev-parse HEAD)" = "$VERIFIERS_COMMIT"
 
