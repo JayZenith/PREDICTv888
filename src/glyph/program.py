@@ -29,7 +29,8 @@ SYNTAX_ERROR = "SYNTAX_ERROR"
 TIMEOUT = "TIMEOUT"
 OTHER = "OTHER"
 SUPPORTED_TOOLS = frozenset({"read_file", "apply_patch", "python_test"})
-IM_END_TOKEN_ID = 151645
+# <|im_end|>, and <|endoftext|>: scripts/init_base.py gives them the same embedding.
+STOP_TOKEN_IDS = [151645, 151643]
 TOOL_NAME_RE = re.compile(r"^[A-Za-z_]\w*$")
 PREDICTION_TURN_RE = re.compile(
     r"<PREDICTION>\n(.+)\n</PREDICTION>\n(CALL [^\n]+)", re.DOTALL
@@ -343,7 +344,7 @@ async def main() -> None:
         completion = await client.chat.completions.create(
             model=args.model,
             messages=messages,
-            extra_body={"stop_token_ids": [IM_END_TOKEN_ID]},
+            extra_body={"stop_token_ids": STOP_TOKEN_IDS},
         )
         return completion.choices[0].message.content or ""
 
