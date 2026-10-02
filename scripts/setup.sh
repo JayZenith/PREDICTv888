@@ -44,6 +44,6 @@ print("torch", torch.__version__, "vllm", vllm.__version__, "flash-attn", flash_
 for i in range(torch.cuda.device_count()):
     print(i, torch.cuda.get_device_name(i), torch.cuda.get_device_capability(i))
 PY
-# Download the base model once so parallel SFT runs don't race on the HF cache.
-uv run --project "$PRIME_DIR" hf download Qwen/Qwen3-1.7B-Base > /dev/null
+# SFT starting checkpoint (also downloads the base model once, before parallel SFT runs).
+[[ -f outputs/base/config.json ]] || uv run --project "$PRIME_DIR" python scripts/init_base.py outputs/base
 echo "ready"

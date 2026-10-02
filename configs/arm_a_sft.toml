@@ -8,7 +8,7 @@ group = "matched-sft"
 name = "arm-a-sft"
 
 [model]
-name = "Qwen/Qwen3-1.7B-Base"
+name = "outputs/base"  # Qwen3-1.7B-Base, see scripts/init_base.py
 impl = "auto"
 seq_len = 1792
 
