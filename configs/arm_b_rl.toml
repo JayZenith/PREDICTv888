@@ -1,0 +1,102 @@
+# Arm B: matched GRPO plus verified-label prediction CE.
+max_steps = 100
+seq_len = 4096
+output_dir = "outputs/arm_b_rl"
+
+[model]
+name = "outputs/arm_b_sft/weights/step_60"
+
+[tokenizer]
+chat_template = "configs/chat_template.jinja"
+eos_token = "<|im_end|>"
+
+[wandb]
+project = "predict-mbpp-1.7b"
+group = "matched-arms"
+name = "arm-b-predict"
+
+[orchestrator]
+batch_size = 64
+group_size = 16
+
+[orchestrator.model.client]
+base_url = ["http://localhost:8001/v1"]
+
+[orchestrator.algo]
+type = "predict"
+alpha = 0.1
+max_aux_tokens = 4096
+
+# Must match [orchestrator.renderer]: the auxiliary sample's context prefix is
+# rendered by the algorithm's own renderer, and it has to tokenize the way the
+# rollout it corrects did. "auto" would resolve to qwen3 and silently diverge.
+[orchestrator.algo.renderer]
+name = "default"
+
+[orchestrator.renderer]
+name = "default"
+
+[orchestrator.train.sampling]
+temperature = 0.8
+max_completion_tokens = 512
+extra_body = { stop_token_ids = [151645], top_k = 20 }
+
+[[orchestrator.train.env]]
+name = "arm-b-train"
+taskset = { id = "glyph", data_path = "data/arm_b_train.jsonl", task = { max_trace_tokens = 4096 } }
+harness = { id = "glyph", arm = "b", runtime = { type = "subprocess" }, max_tool_calls = 8, tool_timeout = 30 }
+pool = { type = "elastic", max_workers = 16, multiplex = 4 }
+
+[[orchestrator.post_batch_filters]]
+type = "zero_advantage"
+enforce = true
+
+[orchestrator.eval]
+interval = 25
+num_examples = 40
+group_size = 1
+
+[orchestrator.eval.sampling]
+temperature = 0.0
+max_completion_tokens = 512
+extra_body = { stop_token_ids = [151645] }
+
+[[orchestrator.eval.env]]
+name = "arm-b-validation"
+taskset = { id = "glyph", data_path = "data/arm_b_validation.jsonl", task = { max_trace_tokens = 4096 } }
+harness = { id = "glyph", arm = "b", runtime = { type = "subprocess" }, max_tool_calls = 8, tool_timeout = 30 }
+pool = { type = "elastic", max_workers = 16, multiplex = 4 }
+
+[trainer.loss]
+type = "default"
+kl_tau = 0.0
+
+[trainer.optim]
+lr = 1e-6
+weight_decay = 0.01
+
+[ckpt]
+interval = 25
+keep_last = 4
+
+[orchestrator.ckpt]
+wait_for_weights_timeout = 60
+
+[trainer.ckpt]
+weights_only = true
+
+[inference]
+gpu_memory_utilization = 0.85
+seed = 42
+
+[inference.server]
+port = 8001
+
+[weight_broadcast]
+type = "filesystem"
+
+[deployment]
+type = "single_node"
+num_train_gpus = 1
+num_infer_gpus = 1
+gpus_per_node = 2

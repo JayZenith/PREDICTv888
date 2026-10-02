@@ -1,0 +1,54 @@
+# Arm B: matched full-parameter SFT on 212 verified protocol traces.
+max_steps = 60
+output_dir = "outputs/arm_b_sft"
+
+[wandb]
+project = "predict-mbpp-1.7b"
+group = "matched-sft"
+name = "arm-b-sft"
+
+[model]
+name = "Qwen/Qwen3-1.7B-Base"
+impl = "auto"
+seq_len = 1280
+
+[tokenizer]
+chat_template = "configs/chat_template.jinja"
+eos_token = "<|im_end|>"
+
+[data]
+type = "sft"
+name = "data/sft/arm_b"
+batch_size = 32
+micro_batch_size = 1
+seq_len = 1280
+pack_function = "stack"
+shuffle = true
+seed = 42
+
+[data.loss_mask]
+system = false
+user = false
+assistant = true
+tool = false
+
+[optim]
+type = "adamw"
+lr = 2e-5
+weight_decay = 0.01
+
+[scheduler]
+type = "linear"
+warmup_steps = 2
+decay_steps = 58
+min_lr = 0.0
+
+[ckpt]
+interval = 60
+keep_last = 1
+weights_only = true
+
+[deployment]
+type = "single_node"
+num_gpus = 1
+gpus_per_node = 1
