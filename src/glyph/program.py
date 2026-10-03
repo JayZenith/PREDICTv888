@@ -301,12 +301,21 @@ def actual_values(project: Path, test_file: Path) -> list[str]:
     return values
 
 
+def prediction_lines(text: str) -> list[str]:
+    return PREDICTION_TURN_RE.fullmatch(text.strip()).group(1).splitlines()
+
+
 def predicted_values(text: str) -> list[str]:
-    lines = PREDICTION_TURN_RE.fullmatch(text.strip()).group(1).splitlines()
     return [
         line.split(" = ", 1)[-1].rpartition(", expected ")[0] or line.split(" = ", 1)[-1]
-        for line in lines
+        for line in prediction_lines(text)
     ]
+
+
+def claims_all_match(text: str) -> bool:
+    """Every line predicts exactly the value the test expects."""
+    parts = [line.split(" = ", 1)[-1].rpartition(", expected ") for line in prediction_lines(text)]
+    return all(value and sep and value == expected for value, sep, expected in parts)
 
 
 def parse_args() -> argparse.Namespace:
@@ -384,6 +393,8 @@ async def main() -> None:
                         "candidate_call_id": pending_candidate,
                         "predicted": predicted_values(assistant),
                         "actual": actual_values(root, Path(args.test_file)),
+                        "claims_all_match": claims_all_match(assistant),
+                        "passes": run_hidden_tests(root, test_code, args.tool_timeout).success,
                     }
                 )
 

@@ -148,6 +148,16 @@ class GlyphTask(vf.Task[GlyphTaskData, vf.State, GlyphTaskConfig]):
         ]
         return sum(lines) / len(lines) if lines else 0.0
 
+    @vf.reward(weight=0.2)
+    async def false_match_penalty(self, trace: vf.Trace) -> float:
+        """Minus the fraction of predictions that claimed every test matches on a
+        candidate that fails. Always 0 for Arm A."""
+        targets = (trace.info.get("glyph") or {}).get("prediction_targets") or []
+        if not targets:
+            return 0.0
+        false = sum(t["claims_all_match"] and not t["passes"] for t in targets)
+        return -false / len(targets)
+
 
 class GlyphTasksetConfig(vf.TasksetConfig):
     data_path: str | None = None
