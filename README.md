@@ -18,27 +18,41 @@ surface_Area(1,2) = 7, expected 5
 CALL apply_patch {...}
 ```
 
-The sandbox runs the candidate to check each line. In RL, Arm B's reward is tests passed
-+ 0.2 × the fraction of prediction lines that are correct. Arm A's reward is tests passed.
+The sandbox runs the candidate to check each line. Arm A's RL reward is tests passed.
+Arm B's adds 0.2 × the fraction of correct prediction lines, minus 0.2 × the fraction of
+predictions that claim every test matches on code that fails.
 
 ## Results
 
-500 held-out MBPP test tasks, greedy, one seed.
+500 held-out MBPP test tasks, greedy. RL: 50 steps, lr 3e-6, 128 rollouts per step, same
+SFT checkpoints for both seeds.
 
 ```text
-              SFT        RL (50 steps)
-Arm A        234 (46.8%)  261 (52.2%)
-Arm B        241 (48.2%)  280 (56.0%)
+                 SFT          RL seed 42    RL seed 43
+Arm A           234 (46.8%)   261 (52.2%)   268 (53.6%)
+Arm B           241 (48.2%)   295 (59.0%)   286 (57.2%)
 ```
 
-- Arm B vs Arm A after RL: on the same tasks, 53 solved only by B, 34 only by A
-  (sign test p ≈ 0.05).
-- RL over SFT: Arm A 60 gained / 33 lost; Arm B 69 gained / 30 lost.
-- Arm B's prediction lines are 36% correct after RL (31% after SFT). Most wrong lines copy
-  the expected value instead of predicting the code's output.
+- Arm B beats Arm A on both seeds. Tasks solved by only one arm: 59 B / 25 A (seed 42),
+  48 B / 30 A (seed 43).
+- Arm B's prediction lines are 35–38% correct after RL. Most wrong lines still copy the
+  expected value instead of predicting the code's output.
+- The Arm B reward terms were added after looking at earlier test scores (no prediction
+  reward, then prediction reward 280, then + false-match penalty 295), so the seed 42 test
+  score is not a clean held-out number. Seed 43 is a fresh run of the final setup.
 
-Checkpoints (code `d711bec`): `JayZenith/PREDICTv888_SFT_A`, `_SFT_B`, `_RL_A_step50`,
-`_RL_B_step50`.
+Checkpoints on Hugging Face (private). SFT, Arm A seed 42 and the no-penalty Arm B are from
+code `d711bec`; the rest from `9da9e73`, which only changes Arm B's reward.
+
+```text
+JayZenith/PREDICTv888_SFT_A                     Arm A SFT
+JayZenith/PREDICTv888_SFT_B                     Arm B SFT
+JayZenith/PREDICTv888_RL_A_step50               Arm A RL, seed 42
+JayZenith/PREDICTv888_RL_A_step50_seed43        Arm A RL, seed 43
+JayZenith/PREDICTv888_B_step50_penalty          Arm B RL, seed 42
+JayZenith/PREDICTv888_B_step50_penalty_seed43   Arm B RL, seed 43
+JayZenith/PREDICTv888_RL_B_step50               Arm B RL without the false-match penalty
+```
 
 ## Run
 
@@ -49,6 +63,7 @@ bash scripts/setup.sh                                   # pinned PRIME-RL + preb
 CUDA_VISIBLE_DEVICES=0 bash scripts/run.sh sft a &      # 20 steps, ~13 min
 CUDA_VISIBLE_DEVICES=1 bash scripts/run.sh sft b
 bash scripts/run.sh rl a                                # both GPUs, ~40 min; then b
+bash scripts/run.sh rl a --inference.seed 43            # second seed
 bash scripts/run.sh eval a outputs/arm_a_rl/weights/step_50 test
 ```
 
