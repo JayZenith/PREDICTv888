@@ -16,7 +16,7 @@ group = "matched-arms"
 name = "arm-a-grpo"
 
 [orchestrator]
-batch_size = 64
+batch_size = 128
 group_size = 16
 
 [orchestrator.algo]
@@ -61,7 +61,7 @@ type = "default"
 kl_tau = 0.0
 
 [trainer.optim]
-lr = 1e-6
+lr = 3e-6
 weight_decay = 0.01
 
 [ckpt]
