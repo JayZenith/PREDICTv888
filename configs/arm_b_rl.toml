@@ -1,5 +1,5 @@
 # Arm B: GRPO with value predictions after each patch.
-max_steps = 75
+max_steps = 50
 seq_len = 4096
 output_dir = "outputs/arm_b_rl"
 
@@ -41,7 +41,7 @@ type = "zero_advantage"
 enforce = true
 
 [orchestrator.eval]
-interval = 75
+interval = 50
 num_examples = 40
 group_size = 1
 
@@ -65,7 +65,7 @@ lr = 3e-6
 weight_decay = 0.01
 
 [ckpt]
-interval = 75
+interval = 50
 keep_last = 1
 
 [orchestrator.ckpt]
