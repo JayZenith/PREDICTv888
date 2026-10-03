@@ -35,8 +35,10 @@ Arm B           241 (48.2%)   295 (59.0%)   286 (57.2%)   285 (57.0%)   289 (57.
 
 - Arm B beats Arm A on all three seeds. Tasks solved by only one arm: 59 B / 25 A (seed 42),
   48 B / 30 A (seed 43), 64 B / 52 A (seed 44). The gap shrinks across seeds, from +34 to +12.
-- Arm B's prediction lines are 35–38% correct after RL. Most wrong lines still copy the
-  expected value instead of predicting the code's output.
+- Arm B's prediction lines are 35–38% correct after RL (31% after SFT). Most wrong lines
+  still copy the expected value instead of predicting the code's output, so Arm B's gain
+  likely comes more from the predict-first protocol and its reward than from accurate
+  predictions.
 - The Arm B reward terms were added after looking at earlier test scores (no prediction
   reward, then prediction reward 280, then + false-match penalty 295), so the seed 42 test
   score is not a clean held-out number. Seeds 43 and 44 are fresh runs of the final setup.
