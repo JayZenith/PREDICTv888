@@ -45,5 +45,6 @@ for i in range(torch.cuda.device_count()):
     print(i, torch.cuda.get_device_name(i), torch.cuda.get_device_capability(i))
 PY
 # Download the base model once so parallel SFT runs don't race on the HF cache.
-uv run --project "$PRIME_DIR" hf download Qwen/Qwen3-1.7B-Base > /dev/null
+# Xet transfers hang on some hosts; plain HTTP does not.
+HF_HUB_DISABLE_XET=1 uv run --project "$PRIME_DIR" hf download Qwen/Qwen3-1.7B-Base > /dev/null
 echo "ready"
