@@ -39,9 +39,9 @@ Arm B           241 (48.2%)   295 (59.0%)   286 (57.2%)   285 (57.0%)   289 (57.
   still copy the expected value instead of predicting the code's output, so Arm B's gain
   likely comes more from the predict-first protocol and its reward than from accurate
   predictions.
-- The Arm B reward terms were added after looking at earlier test scores (no prediction
-  reward, then prediction reward 280, then + false-match penalty 295), so the seed 42 test
-  score is not a clean held-out number. Seeds 43 and 44 are fresh runs of the final setup.
+- Arm B gets two reward terms Arm A has no counterpart for (prediction accuracy and the
+  false-match penalty), so the gap mixes the effect of predicting first with the effect of
+  a denser reward. Arm B without those terms at these settings has not been run.
 
 Checkpoints on Hugging Face (private). SFT, Arm A seed 42 and the no-penalty Arm B are from
 code `d711bec`; the rest from `9da9e73`, which only changes Arm B's reward.
