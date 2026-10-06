@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # usage:
-#   bash scripts/run.sh sft  a|b  [PRIME-RL args]       1 GPU
-#   bash scripts/run.sh rl   a|b  [PRIME-RL args]       2 GPUs (train + infer)
-#   bash scripts/run.sh eval a|b MODEL validation|test  1 GPU, serves MODEL with vLLM
+#   bash scripts/run.sh sft  ARM  [PRIME-RL args]       1 GPU
+#   bash scripts/run.sh rl   ARM  [PRIME-RL args]       2 GPUs (train + infer)
+#   bash scripts/run.sh eval ARM MODEL validation|test  1 GPU, serves MODEL with vLLM
+# ARM is a, b, or b_restate (the restate control, run with Arm B's harness)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 cmd="${1:-}"; arm="${2:-}"
-[[ "$arm" == a || "$arm" == b ]] || { sed -n 2,5p "$0" >&2; exit 2; }
+[[ "$arm" == a || "$arm" == b || "$arm" == b_restate ]] || { sed -n 2,6p "$0" >&2; exit 2; }
 shift 2
 
 export HF_HOME="${HF_HOME:-$PWD/.cache/hf}"
@@ -30,11 +31,11 @@ case "$cmd" in
       sleep 5
     done
     uv run eval glyph \
-      --harness.id glyph --harness.arm "$arm" \
+      --harness.id glyph --harness.arm "${arm:0:1}" \
       --taskset.data-path "data/arm_${arm}_${split}.jsonl" \
       --sampling.temperature 0 --sampling.max-tokens 512 --max-total-tokens 4096 \
       --client.base-url "http://localhost:$port/v1" --client.api-key-var HOME \
       -m policy -n "$n" -r 1 --no-push "$@"
     ;;
-  *) sed -n 2,5p "$0" >&2; exit 2 ;;
+  *) sed -n 2,6p "$0" >&2; exit 2 ;;
 esac

@@ -58,6 +58,9 @@ class GlyphTaskData(vf.TaskData):
 
 class GlyphTaskConfig(vf.TaskConfig):
     max_trace_tokens: int = 4096
+    # Arm B reward terms; off means 0 reward, and the value is still logged as a metric.
+    prediction_reward: bool = True
+    false_match_penalty: bool = True
 
 
 PLACEHOLDER = b"# Write your function here.\n"
@@ -135,28 +138,42 @@ class GlyphTask(vf.Task[GlyphTaskData, vf.State, GlyphTaskConfig]):
     async def passed(self, trace: vf.Trace) -> float:
         return float(self._evaluate(trace)[1])
 
-    @vf.reward(weight=0.2)
-    async def prediction_accuracy(self, trace: vf.Trace) -> float:
-        """Fraction of predicted test values that match the executed candidate.
-        Always 0 for Arm A, which makes no predictions."""
-        targets = (trace.info.get("glyph") or {}).get("prediction_targets") or []
+    @staticmethod
+    def _targets(trace: vf.Trace) -> list[dict]:
+        return (trace.info.get("glyph") or {}).get("prediction_targets") or []
+
+    def _line_accuracy(self, trace: vf.Trace) -> float:
+        """Fraction of predicted test values that match the executed candidate."""
         lines = [
             (target["predicted"][i] if i < len(target["predicted"]) else None) == actual
-            for target in targets
+            for target in self._targets(trace)
             for i, actual in enumerate(target["actual"])
         ]
         return sum(lines) / len(lines) if lines else 0.0
 
-    @vf.reward(weight=0.2)
-    async def false_match_penalty(self, trace: vf.Trace) -> float:
-        """Minus the fraction of predictions that claimed every test matches on a
-        candidate that fails. Always 0 for Arm A."""
-        targets = (trace.info.get("glyph") or {}).get("prediction_targets") or []
+    def _false_match_rate(self, trace: vf.Trace) -> float:
+        """Fraction of predictions that claim every test matches on a failing candidate."""
+        targets = self._targets(trace)
         if not targets:
             return 0.0
-        false = sum(t["claims_all_match"] and not t["passes"] for t in targets)
-        return -false / len(targets)
+        return sum(t["claims_all_match"] and not t["passes"] for t in targets) / len(targets)
 
+    @vf.reward(weight=0.2)
+    async def prediction_accuracy(self, trace: vf.Trace) -> float:
+        """Always 0 for Arm A, which makes no predictions."""
+        return self._line_accuracy(trace) if self.config.prediction_reward else 0.0
+
+    @vf.reward(weight=0.2)
+    async def false_match_penalty(self, trace: vf.Trace) -> float:
+        return -self._false_match_rate(trace) if self.config.false_match_penalty else 0.0
+
+    @vf.metric
+    async def prediction_line_accuracy(self, trace: vf.Trace) -> float:
+        return self._line_accuracy(trace)
+
+    @vf.metric
+    async def false_match_rate(self, trace: vf.Trace) -> float:
+        return self._false_match_rate(trace)
 
 class GlyphTasksetConfig(vf.TasksetConfig):
     data_path: str | None = None

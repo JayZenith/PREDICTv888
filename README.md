@@ -69,6 +69,14 @@ few tasks.
   both variants without it degenerated: about 39% of test tasks hit the 512-token turn limit by repeating code (e.g. `if a == 25: return 0`,
   `if a == 26: ...`), which counts as a fail.
 
+### Restate control (not run yet)
+
+Arm B's SFT traces contain more tokens than Arm A's, so the gain could come from extra
+supervised text rather than from the predicted values. The restate control
+(`data/sft/arm_b_restate`) is the same traces with every PREDICTION line set to the expected
+value, so the block carries no information about the code, and RL rewards tests passed only.
+Compare it with Arm B's "tests passed only" row.
+
 ### Where the gain comes from (tentative)
 
 Arm B's lead is almost entirely in its first patch. After a bad first patch, both arms
@@ -107,17 +115,46 @@ JayZenith/PREDICTv888_B_step50_penalty_seed44   Arm B RL, seed 44
 JayZenith/PREDICTv888_RL_B_step50               Arm B RL without the false-match penalty
 ```
 
-## Run
+## Reproduce
 
-2× RTX 3090 (24 GB) or larger.
+2× RTX 3090 (24 GB) or larger. Every result above is one SFT run per arm, then RL from that
+checkpoint with seeds 42, 43, 44, then a greedy eval on the 500 test tasks.
 
 ```bash
-bash scripts/setup.sh                                   # pinned PRIME-RL + prebuilt wheels
-CUDA_VISIBLE_DEVICES=0 bash scripts/run.sh sft a &      # 20 steps, ~13 min
+bash scripts/setup.sh          # pinned PRIME-RL (patched), prebuilt wheels, base model
+
+# SFT, 20 steps (~13 min), one GPU each
+CUDA_VISIBLE_DEVICES=0 bash scripts/run.sh sft a &
 CUDA_VISIBLE_DEVICES=1 bash scripts/run.sh sft b
-bash scripts/run.sh rl a                                # both GPUs, ~40 min; then b
-bash scripts/run.sh rl a --inference.seed 43            # other seeds: 43, 44
-bash scripts/run.sh eval a outputs/arm_a_rl/weights/step_50 test
+CUDA_VISIBLE_DEVICES=0 bash scripts/run.sh sft b_restate      # restate control
+
+# RL, 50 steps (~40 min), both GPUs, one run at a time
+for seed in 42 43 44; do
+  bash scripts/run.sh rl a --inference.seed $seed --output-dir outputs/arm_a_rl_s$seed
+  bash scripts/run.sh eval a outputs/arm_a_rl_s$seed/weights/step_50 test
+done
+# same for b and b_restate
+```
+
+After step 50 the trainer can take a while to exit; once `weights/step_50` exists, the run
+can be stopped.
+
+Arm B reward variants (the ablation) are two flags in `configs/arm_b_rl.toml`, under the
+train env's `task`:
+
+```text
+prediction_reward = true      # +0.2 × fraction of correct prediction lines
+false_match_penalty = true    # −0.2 × fraction of false "all tests match" claims
+```
+
+Both off is "tests passed only". A term that is off still shows up in the logs as the
+metrics `prediction_line_accuracy` and `false_match_rate`.
+
+The datasets are committed and regenerate byte-for-byte:
+
+```bash
+uv run python -m data.build_arm_b           # Arm B traces from Arm A's, values by execution
+uv run python -m data.build_arm_b_restate   # restate control from Arm B's
 ```
 
 ## Notes
