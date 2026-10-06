@@ -125,6 +125,10 @@ leaves open how much of that comes from the values themselves versus having the 
 - Tasks: MBPP is easy for this model; most first patches are already correct, so there are
   few cases where a prediction could catch a bug (90 of 302 blocks in the SFT data).
 - Model: at 1.7B, predicted values match what the code returns only 35–38% of the time.
+- Contamination: MBPP has been public since 2021 and is likely in Qwen3's pretraining data.
+  Both arms share this, so the comparison holds, but the absolute pass rates may be inflated.
+- One SFT checkpoint per arm: seeds only vary RL sampling, so seed-to-seed spread
+  understates the full run-to-run variation.
 
 Arm B beating Arm A holds across every variant and seed. Separating the finer effects needs
 more seeds, harder tasks, or a larger model.
