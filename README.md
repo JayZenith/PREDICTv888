@@ -40,8 +40,25 @@ Arm B           241 (48.2%)   295 (59.0%)   286 (57.2%)   285 (57.0%)   289 (57.
   likely comes more from the predict-first protocol and its reward than from accurate
   predictions.
 - Arm B gets two reward terms Arm A has no counterpart for (prediction accuracy and the
-  false-match penalty), so the gap mixes the effect of predicting first with the effect of
-  a denser reward. Arm B without those terms at these settings has not been run.
+  false-match penalty), so the gap above mixes the effect of predicting first with the
+  effect of a denser reward. The ablation below separates them.
+
+### Reward ablation (in progress)
+
+Arm B with each reward term turned off (switched to a logged metric), same settings and
+SFT checkpoint. 500 test tasks, greedy.
+
+```text
+Arm B reward                       seed 42   seed 43   seed 44
+tests passed only (= Arm A's)        279
++ false-match penalty                290
++ prediction accuracy                 —
++ both (main result)                 295       286       285
+Arm A (reference)                    261       268       273
+```
+
+With the same reward as Arm A, Arm B still scores 279 vs 261 on seed 42, which points to the
+predict-first protocol helping on its own. One seed so far.
 
 Checkpoints on Hugging Face (private). SFT, Arm A seed 42 and the no-penalty Arm B are from
 code `d711bec`; the rest from `9da9e73`, which only changes Arm B's reward.
