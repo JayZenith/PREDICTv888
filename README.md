@@ -50,15 +50,19 @@ SFT checkpoint. 500 test tasks, greedy.
 
 ```text
 Arm B reward                        seed 42   seed 43   seed 44   mean
-tests passed only (= Arm A's)         279       264       299     280.7
+tests passed only (= Arm A's)         279       268       299     282.0
 + false-match penalty                 290       286       286     287.3
-+ prediction accuracy                  —        269       (running)
++ prediction accuracy                  —        269       285     277.0
 + both (main result)                  295       286       285     288.7
 Arm A (reference)                     261       268       273     267.3
 ```
 
-- With the same reward as Arm A, Arm B still wins on average (280.7 vs 267.3). The extra
-  terms add a few tasks, mostly from the penalty.
+"+ prediction accuracy" has no seed 42 run at these settings. Two evals of the same
+checkpoint (tests passed only, seed 43) scored 264 and 268, so greedy eval alone moves by a
+few tasks.
+
+- With the same reward as Arm A, Arm B still wins on average (282.0 vs 267.3). The extra
+  terms add a few tasks, mostly from the penalty; the accuracy term alone does not help.
 - The penalty also stabilizes runs. On seed 43, both variants without it degenerated: about
   39% of test tasks hit the 512-token turn limit by repeating code (e.g. `if a == 25: return 0`,
   `if a == 26: ...`), which counts as a fail.

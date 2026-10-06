@@ -7,7 +7,6 @@ from pathlib import Path
 
 import verifiers.v1 as vf
 
-
 def _message_value(message, key: str) -> str:
     if isinstance(message, dict):
         value = message.get(key)
