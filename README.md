@@ -69,13 +69,24 @@ few tasks.
   both variants without it degenerated: about 39% of test tasks hit the 512-token turn limit by repeating code (e.g. `if a == 25: return 0`,
   `if a == 26: ...`), which counts as a fail.
 
-### Restate control (not run yet)
+### Restate control
 
 Arm B's SFT traces contain more tokens than Arm A's, so the gain could come from extra
 supervised text rather than from the predicted values. The restate control
 (`data/sft/arm_b_restate`) is the same traces with every PREDICTION line set to the expected
-value, so the block carries no information about the code, and RL rewards tests passed only.
-Compare it with Arm B's "tests passed only" row.
+value, so the block carries no information about the code. RL rewards tests passed only.
+
+```text
+                                    seed 42   seed 43   seed 44   mean
+Arm A                                 261       268       273     267.3
+restate control                       257       290       280     275.7
+Arm B, tests passed only              279       268       299     282.0
+Arm B, + both rewards                 295       286       285     288.7
+```
+
+The control lands between Arm A and Arm B, and both gaps (+8 over Arm A, −6 under Arm B)
+are within seed noise. So part of Arm B's edge may come from the extra block itself, and the
+real predicted values may add a little on top, but three seeds cannot separate the two.
 
 ### Where the gain comes from (tentative)
 
@@ -96,9 +107,8 @@ recovery (3 of 59 solved, vs 51 of 588 when it copied).
 
 So the gain seems to come from training on the prediction lines (SFT on traces containing
 real executed values, plus GRPO over them), which improves how the model writes code
-rather than giving it a working self-check. This is not settled: Arm B's SFT traces are
-also longer, so it gets more supervised tokens. A control where the block only restates
-the expected values, with no prediction, would separate the two.
+rather than giving it a working self-check. The restate control above leaves open how
+much of that comes from the predicted values themselves versus the extra block.
 
 Checkpoints on Hugging Face (private). SFT, Arm A seed 42 and the no-penalty Arm B are from
 code `d711bec`; the rest from `9da9e73`, which only changes Arm B's reward.
