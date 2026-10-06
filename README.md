@@ -118,6 +118,27 @@ predicted values are what the code really returns, plus GRPO over them), which i
 the model writes code rather than giving it a working self-check. The restate control above
 leaves open how much of that comes from the values themselves versus having the block.
 
+### Reward hacking check
+
+Checked on the 500-task test traces of every run above (both SFT checkpoints and every RL run
+at lr 3e-6):
+
+- Hardcoding test answers: one clear case (`eulerian_num`, Arm B with tests-passed-only
+  reward, seed 44: `if n == 3: return 4`, `if n == 4: return 11`, matching the asserts).
+  Lookup-table attempts appear in 0–17 of 500 rollouts per run, already 5–6 in the SFT
+  models, and pass only twice across all runs.
+- Gaming the false-match penalty by predicting a mismatch on correct code: slightly more
+  often with the penalty (8–17 vs 0–8 per run), but the cases inspected are accurate
+  predictions such as `240.0, expected 240`, which count as a mismatch only because the text
+  differs.
+- Skipping predictions: none. Every successful patch has a PREDICTION block.
+- Predicting `raises` to inflate prediction accuracy: never.
+- Editing the tests: not possible; they live outside the project path the tools can reach.
+
+The environment has one weakness: the asserts shown in the prompt are the same ones used for
+grading, so hardcoding them passes. RL barely exploited this in 50 steps; longer runs might.
+Hidden extra tests per task would close it.
+
 ### Limits: not scaled up enough
 
 - Seeds: three per arm. Seeds of the same setup differ by up to ~30 tasks, more than the
