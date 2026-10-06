@@ -43,22 +43,48 @@ Arm B           241 (48.2%)   295 (59.0%)   286 (57.2%)   285 (57.0%)   289 (57.
   false-match penalty), so the gap above mixes the effect of predicting first with the
   effect of a denser reward. The ablation below separates them.
 
-### Reward ablation (in progress)
+### Reward ablation
 
-Arm B with each reward term turned off (switched to a logged metric), same settings and
+Arm B with each extra reward term switched off (kept as a logged metric), same settings and
 SFT checkpoint. 500 test tasks, greedy.
 
 ```text
-Arm B reward                       seed 42   seed 43   seed 44
-tests passed only (= Arm A's)        279
-+ false-match penalty                290
-+ prediction accuracy                 —
-+ both (main result)                 295       286       285
-Arm A (reference)                    261       268       273
+Arm B reward                        seed 42   seed 43   seed 44   mean
+tests passed only (= Arm A's)         279       264       299     280.7
++ false-match penalty                 290       286       286     287.3
++ prediction accuracy                  —        269       (running)
++ both (main result)                  295       286       285     288.7
+Arm A (reference)                     261       268       273     267.3
 ```
 
-With the same reward as Arm A, Arm B still scores 279 vs 261 on seed 42, which points to the
-predict-first protocol helping on its own. One seed so far.
+- With the same reward as Arm A, Arm B still wins on average (280.7 vs 267.3). The extra
+  terms add a few tasks, mostly from the penalty.
+- The penalty also stabilizes runs. On seed 43, both variants without it degenerated: about
+  39% of test tasks hit the 512-token turn limit by repeating code (e.g. `if a == 25: return 0`,
+  `if a == 26: ...`), which counts as a fail.
+
+### Where the gain comes from (tentative)
+
+Arm B's lead is almost entirely in its first patch. After a bad first patch, both arms
+recover about equally:
+
+```text
+           first patch correct (A / B)    solved after a bad first patch (A / B)
+seed 42           244 / 277                         17 / 18
+seed 43           254 / 271                         14 / 15
+seed 44           247 / 266                         26 / 19
+```
+
+Arm B writes its first patch before it predicts anything in that episode, so the in-episode
+prediction cannot be what helps. And when the first patch is broken, Arm B rarely flags it:
+it claims every test matches on 588 of 647 such patches, and flagging doesn't improve
+recovery (3 of 59 solved, vs 51 of 588 when it copied).
+
+So the gain seems to come from training on the prediction lines (SFT on traces containing
+real executed values, plus GRPO over them), which improves how the model writes code
+rather than giving it a working self-check. This is not settled: Arm B's SFT traces are
+also longer, so it gets more supervised tokens. A control where the block only restates
+the expected values, with no prediction, would separate the two.
 
 Checkpoints on Hugging Face (private). SFT, Arm A seed 42 and the no-penalty Arm B are from
 code `d711bec`; the rest from `9da9e73`, which only changes Arm B's reward.
