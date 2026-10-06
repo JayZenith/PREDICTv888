@@ -61,10 +61,12 @@ Arm A (reference)                     261       268       273     267.3
 checkpoint (tests passed only, seed 43) scored 264 and 268, so greedy eval alone moves by a
 few tasks.
 
-- With the same reward as Arm A, Arm B still wins on average (282.0 vs 267.3). The extra
-  terms add a few tasks, mostly from the penalty; the accuracy term alone does not help.
-- The penalty also stabilizes runs. On seed 43, both variants without it degenerated: about
-  39% of test tasks hit the 512-token turn limit by repeating code (e.g. `if a == 25: return 0`,
+- With the same reward as Arm A, Arm B still wins on average (282.0 vs 267.3). Every Arm B
+  variant beats Arm A's mean, so this is the solid result.
+- Differences between the Arm B variants (277–289) are within seed noise: without the
+  penalty, seeds range from 268 to 299. Three seeds cannot resolve a 5-task gap.
+- What the penalty clearly does is stabilize runs: with it, seeds land at 286–290. On seed 43,
+  both variants without it degenerated: about 39% of test tasks hit the 512-token turn limit by repeating code (e.g. `if a == 25: return 0`,
   `if a == 26: ...`), which counts as a fail.
 
 ### Where the gain comes from (tentative)
