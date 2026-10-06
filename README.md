@@ -29,12 +29,12 @@ value equals the expected value but the code fails.
 ## Results
 
 500 held-out MBPP test tasks, greedy. RL: 50 steps, lr 3e-6, 128 rollouts per step, same
-SFT checkpoints for every seed.
+SFT checkpoints for every seed. "sd" is the standard deviation across seeds.
 
 ```text
-                 SFT          RL seed 42    RL seed 43    RL seed 44    RL mean
-Arm A           234 (46.8%)   261 (52.2%)   268 (53.6%)   273 (54.6%)   267 (53.5%)
-Arm B           241 (48.2%)   295 (59.0%)   286 (57.2%)   285 (57.0%)   289 (57.7%)
+                 SFT          RL seed 42    RL seed 43    RL seed 44    RL mean ± sd
+Arm A           234 (46.8%)   261 (52.2%)   268 (53.6%)   273 (54.6%)   267.3 ± 6.0
+Arm B           241 (48.2%)   295 (59.0%)   286 (57.2%)   285 (57.0%)   288.7 ± 5.5
 ```
 
 - Arm B beats Arm A on all three seeds. Tasks solved by only one arm: 59 B / 25 A (seed 42),
@@ -52,12 +52,12 @@ Arm B with each extra reward term switched off (kept as a logged metric), same s
 SFT checkpoint. 500 test tasks, greedy.
 
 ```text
-Arm B reward                        seed 42   seed 43   seed 44   mean
-tests passed only (= Arm A's)         279       268       299     282.0
-+ false-match penalty                 290       286       286     287.3
-+ prediction accuracy                  —        269       285     277.0
-+ both (main result)                  295       286       285     288.7
-Arm A (reference)                     261       268       273     267.3
+Arm B reward                        seed 42   seed 43   seed 44   mean ± sd
+tests passed only (= Arm A's)         279       268       299     282.0 ± 15.7
++ false-match penalty                 290       286       286     287.3 ± 2.3
++ prediction accuracy                  —        269       285     277.0 ± 11.3
++ both (main result)                  295       286       285     288.7 ± 5.5
+Arm A (reference)                     261       268       273     267.3 ± 6.0
 ```
 
 "+ prediction accuracy" has no seed 42 run at these settings. Two evals of the same
@@ -84,11 +84,11 @@ The two datasets differ only where the code is wrong, because on correct code wh
 returns equals the expected value. That is 90 of the 302 PREDICTION blocks.
 
 ```text
-                                    seed 42   seed 43   seed 44   mean
-Arm A                                 261       268       273     267.3
-restate control                       257       290       280     275.7
-Arm B, tests passed only              279       268       299     282.0
-Arm B, + both rewards                 295       286       285     288.7
+                                    seed 42   seed 43   seed 44   mean ± sd
+Arm A                                 261       268       273     267.3 ± 6.0
+restate control                       257       290       280     275.7 ± 16.9
+Arm B, tests passed only              279       268       299     282.0 ± 15.7
+Arm B, + both rewards                 295       286       285     288.7 ± 5.5
 ```
 
 The control lands between Arm A and Arm B, and both gaps (+8 over Arm A, −6 under Arm B)
