@@ -19,9 +19,7 @@ class GlyphTaskData(vf.TaskData):
 
 class GlyphTaskConfig(vf.TaskConfig):
     max_trace_tokens: int = 4096
-    # Arm B reward terms. Off means 0 reward; the value is still logged as a metric.
-    prediction_reward: bool = True
-    false_match_penalty: bool = True
+    test_run_cost: float = 0.1  # reward lost per python_test run beyond the first
 
 
 class GlyphTask(vf.Task[GlyphTaskData, vf.State, GlyphTaskConfig]):
@@ -42,48 +40,32 @@ class GlyphTask(vf.Task[GlyphTaskData, vf.State, GlyphTaskConfig]):
     def _state(trace: vf.Trace) -> dict:
         return trace.info.get("glyph") or {}
 
-    @vf.reward(weight=1.0)
-    async def passed(self, trace: vf.Trace) -> float:
-        """1 if the agent ran a passing python_test and ended with FINAL without a protocol error."""
+    def _passed(self, trace: vf.Trace) -> bool:
+        """The agent ran a passing python_test and ended with FINAL without a protocol error."""
         state = self._state(trace)
         ran_passing_test = any(
             call["tool"] == "python_test" and state["results"][call["id"]]["success"]
             for call in state.get("calls", [])
         )
-        ok = ran_passing_test and state["final_verification"]["success"] and not state["protocol_errors"]
-        return float(ok)
+        return ran_passing_test and state["final_verification"]["success"] and not state["protocol_errors"]
 
-    def _line_accuracy(self, trace: vf.Trace) -> float:
-        """Fraction of predicted values equal to what the code really returns."""
-        lines = [
-            (target["predicted"][i] if i < len(target["predicted"]) else None) == actual
-            for target in self._state(trace).get("prediction_targets", [])
-            for i, actual in enumerate(target["actual"])
-        ]
-        return sum(lines) / len(lines) if lines else 0.0
+    def _test_runs(self, trace: vf.Trace) -> int:
+        return sum(call["tool"] == "python_test" for call in self._state(trace).get("calls", []))
 
-    def _false_match_rate(self, trace: vf.Trace) -> float:
-        """Fraction of PREDICTION blocks that predict every expected value on failing code."""
-        targets = self._state(trace).get("prediction_targets", [])
-        if not targets:
+    @vf.reward(weight=1.0)
+    async def reward(self, trace: vf.Trace) -> float:
+        """Same for both arms: 1 for passing, minus test_run_cost per extra python_test run."""
+        if not self._passed(trace):
             return 0.0
-        return sum(t["claims_all_match"] and not t["passes"] for t in targets) / len(targets)
-
-    @vf.reward(weight=0.2)
-    async def prediction_accuracy(self, trace: vf.Trace) -> float:
-        return self._line_accuracy(trace) if self.config.prediction_reward else 0.0
-
-    @vf.reward(weight=0.2)
-    async def false_match_penalty(self, trace: vf.Trace) -> float:
-        return -self._false_match_rate(trace) if self.config.false_match_penalty else 0.0
+        return 1.0 - self.config.test_run_cost * (self._test_runs(trace) - 1)
 
     @vf.metric
-    async def prediction_line_accuracy(self, trace: vf.Trace) -> float:
-        return self._line_accuracy(trace)
+    async def passed(self, trace: vf.Trace) -> float:
+        return float(self._passed(trace))
 
     @vf.metric
-    async def false_match_rate(self, trace: vf.Trace) -> float:
-        return self._false_match_rate(trace)
+    async def test_runs(self, trace: vf.Trace) -> float:
+        return float(self._test_runs(trace))
 
 
 class GlyphTasksetConfig(vf.TasksetConfig):

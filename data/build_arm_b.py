@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -17,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from glyph.program import SANDBOX_ENV, actual_values, parse_calls  # noqa: E402
+from glyph.program import SANDBOX_ENV, parse_calls  # noqa: E402
 
 PLACEHOLDER = "# Write your function here.\n"
 SYSTEM = (
@@ -27,6 +29,7 @@ SYSTEM = (
     "apply_patch to fix it. After FINAL, stop."
 )
 MAX_TOKENS = 1792  # SFT seq_len
+VALUE_TIMEOUT = 5
 
 # Prints repr(expected value) for each assert, one per line.
 EXPECTED_SCRIPT = r"""
@@ -42,6 +45,57 @@ for node in ast.parse(open(sys.argv[1]).read()).body:
     else:
         print("True")
 """
+
+
+# Prints what the solution returns on one assert: repr of the left side of `==` (or of the
+# whole assert), or "raises ExceptionName".
+VALUE_SCRIPT = r"""
+import ast, sys
+source = open(sys.argv[1], encoding="utf-8").read()
+tests = ast.parse(open(sys.argv[2], encoding="utf-8").read())
+index = int(sys.argv[3])
+namespace = {"__name__": "solution"}
+try:
+    exec(compile(source, "solution.py", "exec"), namespace)
+    asserts = 0
+    for node in tests.body:
+        if not isinstance(node, ast.Assert):
+            exec(compile(ast.Module(body=[node], type_ignores=[]), "tests", "exec"), namespace)
+            continue
+        if asserts == index:
+            test = node.test
+            if isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq):
+                value = repr(eval(compile(ast.Expression(test.left), "tests", "eval"), namespace))
+            else:
+                value = repr(bool(eval(compile(ast.Expression(test), "tests", "eval"), namespace)))
+            break
+        asserts += 1
+except BaseException as exc:
+    value = "raises " + type(exc).__name__
+sys.__stdout__.write("\n" + value + "\n")
+"""
+
+
+def actual_values(project: Path, test_file: Path) -> list[str]:
+    """What the current solution returns on each assert, each in a fresh process."""
+    count = sum(isinstance(node, ast.Assert) for node in ast.parse(test_file.read_text()).body)
+    solution = (project / "solution.py").resolve()
+    values = []
+    with tempfile.TemporaryDirectory(prefix="predict-values-") as cwd:
+        for index in range(count):
+            process = subprocess.Popen(
+                ["python3", "-B", "-c", VALUE_SCRIPT, str(solution), str(test_file.resolve()), str(index)],
+                cwd=cwd, env=SANDBOX_ENV, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            try:
+                stdout, _ = process.communicate(timeout=VALUE_TIMEOUT)
+                values.append(stdout.rstrip("\n").rsplit("\n", 1)[-1])
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.communicate()
+                values.append("times out")
+    return values
 
 
 def assert_calls(test_code: str) -> list[str]:

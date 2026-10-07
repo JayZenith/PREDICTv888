@@ -7,13 +7,13 @@
 Each assistant turn is one `CALL tool {json}` line or a `FINAL: ...` line. Tools:
 read_file, apply_patch (find/replace in a file) and python_test (run solution.py against the
 task's asserts and return the interpreter's output). Arm B must also start the turn after a
-successful patch with a PREDICTION block. The loop writes .glyph/trace.json for scoring.
+successful patch with a PREDICTION block; the block is not graded. The loop writes
+.glyph/trace.json for scoring.
 """
 
 from __future__ import annotations
 
 import argparse
-import ast
 import asyncio
 import json
 import os
@@ -31,14 +31,13 @@ TEST_FILE = Path(".glyph/tests.py")
 STOP_TOKEN_ID = 151643  # <|endoftext|>, the turn end in configs/chat_template.jinja
 TOOLS = ("read_file", "apply_patch", "python_test")
 PREDICTION_TURN_RE = re.compile(r"<PREDICTION>\n(.+)\n</PREDICTION>\n(CALL [^\n]+)", re.DOTALL)
-VALUE_TIMEOUT = 5
 MAX_FEEDBACK_CHARS = 2000
 SANDBOX_ENV = {
     "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
     "LANG": "C.UTF-8",
     "HOME": "/tmp",
     "PYTHONDONTWRITEBYTECODE": "1",
-    "PYTHONHASHSEED": "0",  # set/dict reprs print in a fixed order, so predictions grade the same every run
+    "PYTHONHASHSEED": "0",  # set/dict reprs print in the same order every run
 }
 
 
@@ -100,25 +99,6 @@ def turn_shape_error(text: str, calls: list[Call], *, arm: str, after_patch: boo
             return None
         return "Arm B turn after a patch requires a PREDICTION block, then one CALL"
     return None if len(lines) == 1 else "CALL turn cannot contain additional text"
-
-
-def prediction_lines(text: str) -> list[str]:
-    return PREDICTION_TURN_RE.fullmatch(text.strip()).group(1).splitlines()
-
-
-def predicted_values(text: str) -> list[str]:
-    """The VALUE in each `CALL = VALUE, expected EXPECTED` line."""
-    values = []
-    for line in prediction_lines(text):
-        rest = line.split(" = ", 1)[-1]
-        values.append(rest.rpartition(", expected ")[0] or rest)
-    return values
-
-
-def claims_all_match(text: str) -> bool:
-    """Every line predicts exactly the expected value."""
-    parts = [line.split(" = ", 1)[-1].rpartition(", expected ") for line in prediction_lines(text)]
-    return all(value and sep and value == expected for value, sep, expected in parts)
 
 
 # ---------------------------------------------------------------- tools
@@ -203,59 +183,6 @@ def result_block(call_id: str, result: Result) -> str:
     return f"RESULT {call_id}:\n" + "\n".join(lines)
 
 
-# ---------------------------------------------------------------- grading Arm B's predictions
-
-# Prints what the solution returns on one assert: repr of the left side of `==` (or of the
-# whole assert), or "raises ExceptionName".
-VALUE_SCRIPT = r"""
-import ast, sys
-source = open(sys.argv[1], encoding="utf-8").read()
-tests = ast.parse(open(sys.argv[2], encoding="utf-8").read())
-index = int(sys.argv[3])
-namespace = {"__name__": "solution"}
-try:
-    exec(compile(source, "solution.py", "exec"), namespace)
-    asserts = 0
-    for node in tests.body:
-        if not isinstance(node, ast.Assert):
-            exec(compile(ast.Module(body=[node], type_ignores=[]), "tests", "exec"), namespace)
-            continue
-        if asserts == index:
-            test = node.test
-            if isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq):
-                value = repr(eval(compile(ast.Expression(test.left), "tests", "eval"), namespace))
-            else:
-                value = repr(bool(eval(compile(ast.Expression(test), "tests", "eval"), namespace)))
-            break
-        asserts += 1
-except BaseException as exc:
-    value = "raises " + type(exc).__name__
-sys.__stdout__.write("\n" + value + "\n")
-"""
-
-
-def actual_values(project: Path, test_file: Path) -> list[str]:
-    """What the current solution returns on each assert, each in a fresh process."""
-    count = sum(isinstance(node, ast.Assert) for node in ast.parse(test_file.read_text()).body)
-    solution = (project / "solution.py").resolve()
-    values = []
-    with tempfile.TemporaryDirectory(prefix="predict-values-") as cwd:
-        for index in range(count):
-            process = subprocess.Popen(
-                ["python3", "-B", "-c", VALUE_SCRIPT, str(solution), str(test_file.resolve()), str(index)],
-                cwd=cwd, env=SANDBOX_ENV, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            try:
-                stdout, _ = process.communicate(timeout=VALUE_TIMEOUT)
-                values.append(stdout.rstrip("\n").rsplit("\n", 1)[-1])
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.communicate()
-                values.append("times out")
-    return values
-
-
 # ---------------------------------------------------------------- the loop
 
 def parse_args() -> argparse.Namespace:
@@ -279,7 +206,6 @@ async def main() -> None:
     executed: list[Call] = []
     results: dict[str, Result] = {}
     errors: list[str] = []
-    prediction_targets: list[dict] = []
     after_patch = False
 
     try:
@@ -300,15 +226,6 @@ async def main() -> None:
             if not calls:  # FINAL
                 break
 
-            if args.arm == "b" and after_patch:
-                # Grade the prediction against the patched code. Nothing is shown to the agent.
-                prediction_targets.append({
-                    "predicted": predicted_values(assistant),
-                    "actual": actual_values(root, TEST_FILE),
-                    "claims_all_match": claims_all_match(assistant),
-                    "passes": run_hidden_tests(root, test_code, args.tool_timeout).success,
-                })
-
             if len(executed) >= args.max_tool_calls:
                 errors.append("visible tool-call budget exhausted")
                 break
@@ -326,7 +243,6 @@ async def main() -> None:
         "calls": [asdict(call) for call in executed],
         "results": {call_id: asdict(result) for call_id, result in results.items()},
         "final_verification": asdict(run_hidden_tests(root, test_code, args.tool_timeout)),
-        "prediction_targets": prediction_targets,
         "protocol_errors": errors,
     }
     Path(".glyph/trace.json").write_text(json.dumps(record), encoding="utf-8")

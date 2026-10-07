@@ -20,19 +20,27 @@ CALL apply_patch {...}
 ```
 
 If any predicted value differs from its expected value, the code is wrong, so the next step
-is a fix instead of a test. The sandbox runs the code to get the value it really returns.
+is a fix instead of a test. The prediction is never graded or shown back to the agent.
 
-Arm A's RL reward is tests passed. Arm B's adds 0.2 × the fraction of predicted values that
-equal what the code really returns, minus 0.2 × the fraction of blocks where every predicted
-value equals the expected value but the code fails.
+Both arms get the same RL reward:
+
+```text
+reward = passed × (1 − 0.1 × (python_test runs − 1))
+```
+
+A pass needs a passing `python_test`, so every run that scores has at least one. Arm A can
+only save test runs by writing correct code first; Arm B can also catch a wrong patch in its
+prediction and fix it without running it. If the prediction helps, Arm B should gain more.
 
 ## Results
 
-All results below were produced with an earlier environment (code up to `a289e0e`) whose
-`python_test` returned a one-line summary instead of the interpreter's output: "tests
-failed", "generated solution raised a runtime error", "generated solution has a syntax
-error" or "tests timed out". The current code returns the real stdout and stderr (traceback,
-failing assert). These results have not been rerun with it yet.
+All results below come from an earlier setup (code up to `a289e0e`) and have not been rerun:
+
+- `python_test` returned a one-line summary ("tests failed", "generated solution raised a
+  runtime error", ...) instead of the interpreter's output.
+- Arm A's reward was tests passed. Arm B's added 0.2 × the fraction of predicted values equal
+  to what the code returned, minus 0.2 × the fraction of blocks predicting every expected
+  value on failing code. The ablation below switches those two terms off.
 
 500 held-out MBPP test tasks, greedy. RL: 50 steps, lr 3e-6, 128 rollouts per step, same
 SFT checkpoints for every seed. "sd" is the standard deviation across seeds.
@@ -199,16 +207,8 @@ done
 After step 50 the trainer can take a while to exit; once `weights/step_50` exists, the run
 can be stopped.
 
-Arm B reward variants (the ablation) are two flags in `configs/arm_b_rl.toml`, under the
-train env's `task`:
-
-```text
-prediction_reward = true      # +0.2 × fraction of predicted values equal to what the code returns
-false_match_penalty = true    # −0.2 × fraction of blocks predicting all expected values on failing code
-```
-
-Both off is "tests passed only". A term that is off still shows up in the logs as the
-metrics `prediction_line_accuracy` and `false_match_rate`. The pass/fail reward is `passed`.
+The cost per extra test run is `test_run_cost` (default 0.1) in the train env's `task` in
+each RL config. Logged metrics: `passed`, `test_runs`.
 
 The datasets are committed and regenerate byte-for-byte, in this order:
 

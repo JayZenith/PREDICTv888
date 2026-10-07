@@ -1,4 +1,4 @@
-# Restate control: Arm B protocol, the block only restates expected values. Reward = tests passed.
+# Restate control: Arm B protocol, the block only restates expected values.
 max_steps = 50
 seq_len = 4096
 output_dir = "outputs/arm_b_restate_rl"
@@ -31,7 +31,7 @@ extra_body = { stop_token_ids = [151643], top_k = 20 }
 
 [[orchestrator.train.env]]
 name = "arm-b-restate-train"
-taskset = { id = "glyph", data_path = "data/arm_b_restate_train.jsonl", task = { max_trace_tokens = 4096, prediction_reward = false, false_match_penalty = false } }
+taskset = { id = "glyph", data_path = "data/arm_b_restate_train.jsonl", task = { max_trace_tokens = 4096 } }
 harness = { id = "glyph", arm = "b", runtime = { type = "subprocess" }, max_tool_calls = 8, tool_timeout = 30 }
 pool = { type = "elastic", max_workers = 16, multiplex = 4 }
 

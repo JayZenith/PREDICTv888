@@ -31,7 +31,7 @@ extra_body = { stop_token_ids = [151643], top_k = 20 }
 
 [[orchestrator.train.env]]
 name = "arm-b-train"
-taskset = { id = "glyph", data_path = "data/arm_b_train.jsonl", task = { max_trace_tokens = 4096, prediction_reward = true, false_match_penalty = true } }
+taskset = { id = "glyph", data_path = "data/arm_b_train.jsonl", task = { max_trace_tokens = 4096 } }
 harness = { id = "glyph", arm = "b", runtime = { type = "subprocess" }, max_tool_calls = 8, tool_timeout = 30 }
 pool = { type = "elastic", max_workers = 16, multiplex = 4 }
 
