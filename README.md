@@ -191,7 +191,7 @@ CUDA_VISIBLE_DEVICES=0 bash scripts/run.sh sft b_restate      # restate control
 # RL, 50 steps (~40 min), both GPUs, one run at a time
 for seed in 42 43 44; do
   bash scripts/run.sh rl a --inference.seed $seed --output-dir outputs/arm_a_rl_s$seed
-  bash scripts/run.sh eval a outputs/arm_a_rl_s$seed/weights/step_50 test
+  bash scripts/run.sh eval a outputs/arm_a_rl_s$seed/weights/step_50
 done
 # same for b and b_restate
 ```
@@ -208,26 +208,26 @@ false_match_penalty = true    # −0.2 × fraction of blocks predicting all expe
 ```
 
 Both off is "tests passed only". A term that is off still shows up in the logs as the
-metrics `prediction_line_accuracy` and `false_match_rate`.
+metrics `prediction_line_accuracy` and `false_match_rate`. The pass/fail reward is `passed`.
 
-The datasets are committed and regenerate byte-for-byte:
+The datasets are committed and regenerate byte-for-byte, in this order:
 
 ```bash
-uv run python -m data.build_arm_a           # Arm A tool results from the environment
-uv run python -m data.build_arm_b           # Arm B traces from Arm A's, values by execution
-uv run python -m data.build_arm_b_restate   # restate control from Arm B's
+uv run python -m data.build_arm_a           # Arm A tool results, replayed through the environment
+uv run python -m data.build_arm_b           # Arm B from Arm A: predicted values found by running each patch
+uv run python -m data.build_arm_b_restate   # restate control from Arm B
 ```
+
+`data/arm_a_{train,test}.jsonl` (212 RL tasks, 500 test tasks) and the Arm A SFT traces are
+the inputs; every other data file is built from them.
 
 ## Notes
 
-- After `python_test`, the agent sees the interpreter's real stdout and stderr (traceback with
+- After `python_test` the agent sees the interpreter's real stdout and stderr (traceback with
   the failing assert), truncated to 2000 characters, with the temp path stripped.
-  `data/build_arm_a.py` replays Arm A's SFT traces through the environment so their tool
-  results match it exactly; `build_arm_b` and `build_arm_b_restate` derive from those.
-
-- Turns end with `<|endoftext|>`. The base model barely trained `<|im_end|>`, so a ChatML
-  `<|im_end|>` turn end left sampled turns running past the stop.
-- `patches/prime-rl.patch` makes the CPU-offloaded optimizer step one parameter at a time,
-  so 1.7B full fine-tuning fits on a 24 GB GPU.
-- `data/build_arm_b.py` rebuilds the Arm B SFT traces from Arm A's: same tasks, same
-  candidate patches, with predictions computed by executing each candidate.
+- Turns end with `<|endoftext|>`, Qwen3-1.7B-Base's own EOS token. The base model barely
+  trained `<|im_end|>`, so a ChatML `<|im_end|>` turn end left sampled turns running past it.
+- `patches/prime-rl.patch` makes the CPU-offloaded optimizer step one parameter at a time, so
+  1.7B full fine-tuning fits on a 24 GB GPU.
+- The Arm A SFT traces and task files come from the original PREDICT repo's `data/prepare.py`
+  (MBPP, seed 42 split); this repo only refreshes their tool results.

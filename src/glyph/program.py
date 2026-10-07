@@ -2,7 +2,13 @@
 # requires-python = ">=3.11"
 # dependencies = ["openai==2.32.0"]
 # ///
-"""Sandbox-side PREDICT agent loop for Python function tasks."""
+"""The agent loop, run in the sandbox for one task.
+
+Each assistant turn is one `CALL tool {json}` line or a `FINAL: ...` line. Tools:
+read_file, apply_patch (find/replace in a file) and python_test (run solution.py against the
+task's asserts and return the interpreter's output). Arm B must also start the turn after a
+successful patch with a PREDICTION block. The loop writes .glyph/trace.json for scoring.
+"""
 
 from __future__ import annotations
 
@@ -21,13 +27,10 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
-
-SUPPORTED_TOOLS = frozenset({"read_file", "apply_patch", "python_test"})
+TEST_FILE = Path(".glyph/tests.py")
 STOP_TOKEN_ID = 151643  # <|endoftext|>, the turn end in configs/chat_template.jinja
-TOOL_NAME_RE = re.compile(r"^[A-Za-z_]\w*$")
-PREDICTION_TURN_RE = re.compile(
-    r"<PREDICTION>\n(.+)\n</PREDICTION>\n(CALL [^\n]+)", re.DOTALL
-)
+TOOLS = ("read_file", "apply_patch", "python_test")
+PREDICTION_TURN_RE = re.compile(r"<PREDICTION>\n(.+)\n</PREDICTION>\n(CALL [^\n]+)", re.DOTALL)
 VALUE_TIMEOUT = 5
 MAX_FEEDBACK_CHARS = 2000
 SANDBOX_ENV = {
@@ -35,6 +38,7 @@ SANDBOX_ENV = {
     "LANG": "C.UTF-8",
     "HOME": "/tmp",
     "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONHASHSEED": "0",  # set/dict reprs print in a fixed order, so predictions grade the same every run
 }
 
 
@@ -54,82 +58,81 @@ class Result:
     timed_out: bool = False
 
 
-def parse_call_line(line: str) -> tuple[Call | None, str | None]:
-    stripped = line.strip()
-    if not stripped.startswith("CALL "):
-        return None, None
-    try:
-        _, rest = stripped.split(None, 1)
-        tool, payload = rest.split(None, 1)
-        decoded = json.loads(payload)
-    except (ValueError, json.JSONDecodeError) as exc:
-        return None, f"malformed CALL: {exc}"
-    if not TOOL_NAME_RE.fullmatch(tool) or not isinstance(decoded, dict):
-        return None, "malformed CALL"
-    params = dict(decoded)
-    call_id = params.pop("id", None)
-    if not isinstance(call_id, str) or not call_id:
-        return None, "CALL requires a string id"
-    if any(not isinstance(value, str) for value in params.values()):
-        return None, "CALL arguments must be strings"
-    return Call(tool, call_id, params), None
+# ---------------------------------------------------------------- parsing the assistant turn
 
-
-def parse_calls(
-    text: str, seen_ids: set[str] | None = None
-) -> tuple[list[Call], list[str]]:
-    calls: list[Call] = []
-    errors: list[str] = []
-    seen = set(seen_ids or ())
+def parse_calls(text: str, seen_ids: set[str] = frozenset()) -> tuple[list[Call], list[str]]:
+    """Every `CALL tool {json}` line in the turn, and any errors in them."""
+    calls, errors, seen = [], [], set(seen_ids)
     for line_no, line in enumerate(text.splitlines(), 1):
-        call, error = parse_call_line(line)
-        if error:
-            errors.append(f"line {line_no}: {error}")
-        if call is None:
+        line = line.strip()
+        if not line.startswith("CALL "):
             continue
-        if call.id in seen:
-            errors.append(f"line {line_no}: duplicate CALL id {call.id}")
+        try:
+            _, tool, payload = line.split(None, 2)
+            params = json.loads(payload)
+        except ValueError as exc:
+            errors.append(f"line {line_no}: malformed CALL: {exc}")
             continue
-        seen.add(call.id)
-        calls.append(call)
+        call_id = params.pop("id", None) if isinstance(params, dict) else None
+        if not re.fullmatch(r"[A-Za-z_]\w*", tool) or not isinstance(call_id, str) or not call_id:
+            errors.append(f"line {line_no}: malformed CALL")
+        elif any(not isinstance(v, str) for v in params.values()):
+            errors.append(f"line {line_no}: CALL arguments must be strings")
+        elif call_id in seen:
+            errors.append(f"line {line_no}: duplicate CALL id {call_id}")
+        else:
+            seen.add(call_id)
+            calls.append(Call(tool, call_id, params))
     return calls, errors
 
 
-def validate_turn_shape(
-    text: str,
-    calls: list[Call],
-    *,
-    arm: str,
-    pending_candidate: bool,
-) -> list[str]:
+def turn_shape_error(text: str, calls: list[Call], *, arm: str, after_patch: bool) -> str | None:
+    """A turn is one CALL or one FINAL; Arm B's turn after a patch is PREDICTION + one CALL."""
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not calls:
         if len(lines) == 1 and lines[0].startswith("FINAL:"):
-            return []
-        return ["assistant turn must contain exactly one CALL or one FINAL"]
+            return None
+        return "assistant turn must contain exactly one CALL or one FINAL"
     if len(calls) != 1:
-        return ["assistant turn requires exactly one CALL"]
-    call_lines = [line for line in lines if line.startswith("CALL ")]
-    if arm == "b" and pending_candidate:
-        if not PREDICTION_TURN_RE.fullmatch(text.strip()):
-            return ["Arm B turn after a patch requires a PREDICTION block, then one CALL"]
-        return []
-    if len(lines) != 1 or len(call_lines) != 1:
-        return ["CALL turn cannot contain additional text"]
-    return []
+        return "assistant turn requires exactly one CALL"
+    if arm == "b" and after_patch:
+        if PREDICTION_TURN_RE.fullmatch(text.strip()):
+            return None
+        return "Arm B turn after a patch requires a PREDICTION block, then one CALL"
+    return None if len(lines) == 1 else "CALL turn cannot contain additional text"
 
 
-def confined_path(value: str, root: Path, *, require_exists: bool = False) -> Path:
-    raw = Path(value)
-    candidate = raw.resolve(strict=False) if raw.is_absolute() else (Path.cwd() / raw).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        candidate = (root / raw).resolve()
-    candidate.relative_to(root)
-    if require_exists and not candidate.exists():
-        raise FileNotFoundError(candidate)
-    return candidate
+def prediction_lines(text: str) -> list[str]:
+    return PREDICTION_TURN_RE.fullmatch(text.strip()).group(1).splitlines()
+
+
+def predicted_values(text: str) -> list[str]:
+    """The VALUE in each `CALL = VALUE, expected EXPECTED` line."""
+    values = []
+    for line in prediction_lines(text):
+        rest = line.split(" = ", 1)[-1]
+        values.append(rest.rpartition(", expected ")[0] or rest)
+    return values
+
+
+def claims_all_match(text: str) -> bool:
+    """Every line predicts exactly the expected value."""
+    parts = [line.split(" = ", 1)[-1].rpartition(", expected ") for line in prediction_lines(text)]
+    return all(value and sep and value == expected for value, sep, expected in parts)
+
+
+# ---------------------------------------------------------------- tools
+
+def confined_path(value: str, root: Path) -> Path:
+    """Resolve a tool path relative to the workspace or to the project, inside the project."""
+    path = (Path.cwd() / value).resolve()
+    if not path.is_relative_to(root):
+        path = (root / value).resolve()
+    if not path.is_relative_to(root):
+        raise ValueError(f"{value} is outside the project")
+    if not path.exists():
+        raise FileNotFoundError(path)
+    return path
 
 
 def run_hidden_tests(project: Path, test_code: str, timeout: int) -> Result:
@@ -149,50 +152,41 @@ def run_hidden_tests(project: Path, test_code: str, timeout: int) -> Result:
         )
         try:
             process = subprocess.Popen(
-                ["python3", "-B", "check.py"],
-                cwd=temporary,
-                env=SANDBOX_ENV,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                start_new_session=True,
+                ["python3", "-B", "check.py"], cwd=temporary, env=SANDBOX_ENV, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
             )
             try:
                 stdout, stderr = process.communicate(timeout=timeout)
-                stderr = stderr.replace(f"{temporary}/", "")  # keep output independent of the temp dir
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.communicate()
                 return Result(False, "", f"tests timed out after {timeout}s", -1, timed_out=True)
         except OSError as exc:
             return Result(False, "", str(exc), exc.errno or -1)
+        stderr = stderr.replace(f"{temporary}/", "")  # keep output independent of the temp dir
     passed = process.returncode == 0 and stdout.strip().splitlines()[-1:] == [marker]
     stdout = stdout.replace(marker + "\n", "")
     return Result(passed, stdout[-MAX_FEEDBACK_CHARS:], stderr[-MAX_FEEDBACK_CHARS:], process.returncode)
 
 
 def execute_tool(call: Call, root: Path, test_code: str, timeout: int) -> Result:
-    if call.tool not in SUPPORTED_TOOLS:
+    if call.tool not in TOOLS:
         return Result(False, "", f"unknown tool: {call.tool}", -1)
     try:
         if call.tool == "read_file":
-            path = confined_path(call.params.get("file_path", ""), root, require_exists=True)
+            path = confined_path(call.params.get("file_path", ""), root)
             return Result(True, path.read_text(encoding="utf-8")[:8000], "", 0)
         if call.tool == "apply_patch":
-            path = confined_path(call.params.get("file_path", ""), root, require_exists=True)
-            find = call.params.get("find")
-            replace = call.params.get("replace")
+            path = confined_path(call.params.get("file_path", ""), root)
+            find, replace = call.params.get("find"), call.params.get("replace")
             if find is None or replace is None:
                 return Result(False, "", "apply_patch needs file_path, find, replace", -1)
             text = path.read_text(encoding="utf-8")
-            count = text.count(find)
-            if count != 1:
-                return Result(False, "", f"find must occur exactly once; found {count}", -1)
+            if text.count(find) != 1:
+                return Result(False, "", f"find must occur exactly once; found {text.count(find)}", -1)
             path.write_text(text.replace(find, replace, 1), encoding="utf-8")
             return Result(True, "patch applied", "", 0)
-        project = confined_path(
-            call.params.get("project_path", "."), root, require_exists=True
-        )
+        project = confined_path(call.params.get("project_path", "."), root)
         return run_hidden_tests(project, test_code, timeout)
     except (OSError, UnicodeError, ValueError) as exc:
         return Result(False, "", f"tool error: {exc}", -1)
@@ -209,6 +203,10 @@ def result_block(call_id: str, result: Result) -> str:
     return f"RESULT {call_id}:\n" + "\n".join(lines)
 
 
+# ---------------------------------------------------------------- grading Arm B's predictions
+
+# Prints what the solution returns on one assert: repr of the left side of `==` (or of the
+# whole assert), or "raises ExceptionName".
 VALUE_SCRIPT = r"""
 import ast, sys
 source = open(sys.argv[1], encoding="utf-8").read()
@@ -237,7 +235,7 @@ sys.__stdout__.write("\n" + value + "\n")
 
 
 def actual_values(project: Path, test_file: Path) -> list[str]:
-    """What the current solution returns on each assert's call, in SFT format."""
+    """What the current solution returns on each assert, each in a fresh process."""
     count = sum(isinstance(node, ast.Assert) for node in ast.parse(test_file.read_text()).body)
     solution = (project / "solution.py").resolve()
     values = []
@@ -245,11 +243,7 @@ def actual_values(project: Path, test_file: Path) -> list[str]:
         for index in range(count):
             process = subprocess.Popen(
                 ["python3", "-B", "-c", VALUE_SCRIPT, str(solution), str(test_file.resolve()), str(index)],
-                cwd=cwd,
-                env=SANDBOX_ENV,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                cwd=cwd, env=SANDBOX_ENV, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
             try:
@@ -262,22 +256,7 @@ def actual_values(project: Path, test_file: Path) -> list[str]:
     return values
 
 
-def prediction_lines(text: str) -> list[str]:
-    return PREDICTION_TURN_RE.fullmatch(text.strip()).group(1).splitlines()
-
-
-def predicted_values(text: str) -> list[str]:
-    return [
-        line.split(" = ", 1)[-1].rpartition(", expected ")[0] or line.split(" = ", 1)[-1]
-        for line in prediction_lines(text)
-    ]
-
-
-def claims_all_match(text: str) -> bool:
-    """Every line predicts exactly the value the test expects."""
-    parts = [line.split(" = ", 1)[-1].rpartition(", expected ") for line in prediction_lines(text)]
-    return all(value and sep and value == expected for value, sep, expected in parts)
-
+# ---------------------------------------------------------------- the loop
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -285,7 +264,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-key", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--trace-prefix", required=True)
-    parser.add_argument("--test-file", default=".glyph/tests.py")
     parser.add_argument("--arm", choices=("a", "b"), default="a")
     parser.add_argument("--max-tool-calls", type=int, default=8)
     parser.add_argument("--tool-timeout", type=int, default=30)
@@ -294,97 +272,64 @@ def parse_args() -> argparse.Namespace:
 
 async def main() -> None:
     args = parse_args()
-    root = confined_path(args.trace_prefix, Path.cwd().resolve(), require_exists=True)
+    root = Path(args.trace_prefix).resolve(strict=True)
     messages = json.loads(os.environ["GLYPH_INITIAL_MESSAGES"])
-    test_code = Path(args.test_file).read_text(encoding="utf-8")
-    client = AsyncOpenAI(
-        base_url=args.base_url,
-        api_key=args.api_key,
-        timeout=1800.0,
-        max_retries=0,
-    )
+    test_code = TEST_FILE.read_text(encoding="utf-8")
+    client = AsyncOpenAI(base_url=args.base_url, api_key=args.api_key, timeout=1800.0, max_retries=0)
     executed: list[Call] = []
     results: dict[str, Result] = {}
     errors: list[str] = []
     prediction_targets: list[dict] = []
-    pending_candidate: str | None = None
-
-    async def complete() -> str:
-        completion = await client.chat.completions.create(
-            model=args.model,
-            messages=messages,
-            extra_body={"stop_token_ids": [STOP_TOKEN_ID]},
-        )
-        return completion.choices[0].message.content or ""
-
-    def append_result(call: Call, result: Result) -> None:
-        executed.append(call)
-        results[call.id] = result
-        messages.append(
-            {
-                "role": "tool",
-                "tool_call_id": call.id,
-                "content": result_block(call.id, result),
-            }
-        )
+    after_patch = False
 
     try:
         while True:
-            assistant = await complete()
+            completion = await client.chat.completions.create(
+                model=args.model, messages=messages, extra_body={"stop_token_ids": [STOP_TOKEN_ID]},
+            )
+            assistant = completion.choices[0].message.content or ""
             messages.append({"role": "assistant", "content": assistant})
-            calls, parse_errors = parse_calls(
-                assistant, {call.id for call in executed}
-            )
-            errors.extend(parse_errors)
+
+            calls, parse_errors = parse_calls(assistant, {call.id for call in executed})
             if parse_errors:
+                errors.extend(parse_errors)
                 break
-            shape_errors = validate_turn_shape(
-                assistant,
-                calls,
-                arm=args.arm,
-                pending_candidate=pending_candidate is not None,
-            )
-            errors.extend(shape_errors)
-            if shape_errors or not calls:
+            if shape_error := turn_shape_error(assistant, calls, arm=args.arm, after_patch=after_patch):
+                errors.append(shape_error)
+                break
+            if not calls:  # FINAL
                 break
 
-            if args.arm == "b" and pending_candidate is not None:
-                prediction_targets.append(
-                    {
-                        "candidate_call_id": pending_candidate,
-                        "predicted": predicted_values(assistant),
-                        "actual": actual_values(root, Path(args.test_file)),
-                        "claims_all_match": claims_all_match(assistant),
-                        "passes": run_hidden_tests(root, test_code, args.tool_timeout).success,
-                    }
-                )
+            if args.arm == "b" and after_patch:
+                # Grade the prediction against the patched code. Nothing is shown to the agent.
+                prediction_targets.append({
+                    "predicted": predicted_values(assistant),
+                    "actual": actual_values(root, TEST_FILE),
+                    "claims_all_match": claims_all_match(assistant),
+                    "passes": run_hidden_tests(root, test_code, args.tool_timeout).success,
+                })
 
             if len(executed) >= args.max_tool_calls:
                 errors.append("visible tool-call budget exhausted")
                 break
             call = calls[0]
             result = execute_tool(call, root, test_code, args.tool_timeout)
-            append_result(call, result)
-            if args.arm == "b":
-                applied = call.tool == "apply_patch" and result.success
-                pending_candidate = call.id if applied else None
+            executed.append(call)
+            results[call.id] = result
+            messages.append({"role": "tool", "tool_call_id": call.id, "content": result_block(call.id, result)})
+            after_patch = call.tool == "apply_patch" and result.success
     finally:
         await client.close()
 
-    final_verification = run_hidden_tests(root, test_code, args.tool_timeout)
     record = {
         "arm": args.arm,
         "calls": [asdict(call) for call in executed],
-        "final_verification": asdict(final_verification),
-        "results": {
-            call_id: asdict(result) for call_id, result in results.items()
-        },
+        "results": {call_id: asdict(result) for call_id, result in results.items()},
+        "final_verification": asdict(run_hidden_tests(root, test_code, args.tool_timeout)),
         "prediction_targets": prediction_targets,
         "protocol_errors": errors,
     }
-    path = Path(".glyph/trace.json")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record), encoding="utf-8")
+    Path(".glyph/trace.json").write_text(json.dumps(record), encoding="utf-8")
 
 
 if __name__ == "__main__":
