@@ -176,7 +176,7 @@ def build(row):
         name, args = parse_call(message)
         require(result["role"] == "tool" and result["content"].startswith(f"RESULT {args['id']}:\n"), "Invalid RESULT")
         if name == "python_test" and seen_patches < patches:
-            require("\nstatus: failed\n" in result["content"], "Unexpected failing test RESULT")
+            require(result["content"].startswith(f"RESULT {args['id']}:\nstatus: failed"), "Unexpected failing test RESULT")
             continue
         count += 1
         call_id = f"c{count}"
@@ -212,7 +212,7 @@ def build(row):
             pending = "<PREDICTION>\n" + "\n".join(lines) + "\n</PREDICTION>\n"
         else:
             require(seen_patches == patches, "Premature python_test")
-            require(result["content"] == f"RESULT {original_id}:\nstatus: success\nstdout:\ntests passed", "Nonpassing python_test retained")
+            require(result["content"].startswith(f"RESULT {original_id}:\nstatus: success"), "Nonpassing python_test retained")
             execute(code, row["test_code"], "test")
     require(not pending and out[-2]["content"].split("\n")[-1].startswith("CALL python_test "), "Missing final test")
     require(messages[-1]["content"].startswith("FINAL:"), "Missing FINAL")

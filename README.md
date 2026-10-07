@@ -28,6 +28,12 @@ value equals the expected value but the code fails.
 
 ## Results
 
+All results below were produced with an earlier environment (code up to `a289e0e`) whose
+`python_test` returned a one-line summary instead of the interpreter's output: "tests
+failed", "generated solution raised a runtime error", "generated solution has a syntax
+error" or "tests timed out". The current code returns the real stdout and stderr (traceback,
+failing assert). These results have not been rerun with it yet.
+
 500 held-out MBPP test tasks, greedy. RL: 50 steps, lr 3e-6, 128 rollouts per step, same
 SFT checkpoints for every seed. "sd" is the standard deviation across seeds.
 
@@ -207,11 +213,17 @@ metrics `prediction_line_accuracy` and `false_match_rate`.
 The datasets are committed and regenerate byte-for-byte:
 
 ```bash
+uv run python -m data.build_arm_a           # Arm A tool results from the environment
 uv run python -m data.build_arm_b           # Arm B traces from Arm A's, values by execution
 uv run python -m data.build_arm_b_restate   # restate control from Arm B's
 ```
 
 ## Notes
+
+- After `python_test`, the agent sees the interpreter's real stdout and stderr (traceback with
+  the failing assert), truncated to 2000 characters, with the temp path stripped.
+  `data/build_arm_a.py` replays Arm A's SFT traces through the environment so their tool
+  results match it exactly; `build_arm_b` and `build_arm_b_restate` derive from those.
 
 - Turns end with `<|endoftext|>`. The base model barely trained `<|im_end|>`, so a ChatML
   `<|im_end|>` turn end left sampled turns running past the stop.

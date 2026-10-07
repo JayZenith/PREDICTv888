@@ -62,7 +62,6 @@ class GlyphHarness(vf.Harness[GlyphHarnessConfig]):
             **self.config.resolved_env,
             "GLYPH_INITIAL_MESSAGES": json.dumps(messages),
         }
-        # Run program.py in sandbox
         return await runtime.run_program(argv, env)
 
 

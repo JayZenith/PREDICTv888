@@ -7,6 +7,7 @@ from pathlib import Path
 
 import verifiers.v1 as vf
 
+
 def _message_value(message, key: str) -> str:
     if isinstance(message, dict):
         value = message.get(key)
@@ -28,30 +29,13 @@ def message_tool_call_id(message) -> str:
 
 
 def load_rows(data_path: str, max_samples: int | None = None) -> list[dict]:
-    path = Path(data_path)
-    rows: list[dict] = []
-    with path.open(encoding="utf-8") as source:
-        for line_no, line in enumerate(source, 1):
-            if max_samples is not None and len(rows) >= max_samples:
-                break
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"{path}:{line_no}: invalid JSON: {exc.msg}") from exc
-            required = {"case_id", "prompt", "trace_prefix", "test_code"}
-            if not isinstance(row, dict) or not required <= row.keys():
-                raise ValueError(f"{path}:{line_no}: missing required task fields")
-            if not isinstance(row["prompt"], list):
-                raise ValueError(f"{path}:{line_no}: prompt must be a message list")
-            rows.append(row)
-    return rows
+    rows = [json.loads(line) for line in Path(data_path).read_text(encoding="utf-8").splitlines()]
+    return rows[:max_samples]
 
 
 class GlyphTaskData(vf.TaskData):
     arm: str = "a"
     case_id: str
-    source: str = "mbpp"
-    source_task_id: int
     trace_prefix: str
     test_code: str
 
@@ -185,27 +169,22 @@ class GlyphTaskset(vf.Taskset[GlyphTask, GlyphTasksetConfig]):
     def load(self) -> list[GlyphTask]:
         if not self.config.data_path:
             raise ValueError("GlyphTaskset requires an explicit data_path")
-        data_path = Path(self.config.data_path).expanduser().resolve(strict=True)
-        rows = load_rows(str(data_path), self.config.max_samples)
-        tasks: list[GlyphTask] = []
-        for idx, row in enumerate(rows):
-            tasks.append(
-                GlyphTask(
-                    GlyphTaskData(
-                        idx=idx,
-                        name=row["case_id"],
-                        prompt=row["prompt"],
-                        arm=row.get("arm", "a"),
-                        case_id=row["case_id"],
-                        source=row.get("source", "mbpp"),
-                        source_task_id=int(row.get("task_id", idx)),
-                        trace_prefix=row["trace_prefix"],
-                        test_code=row["test_code"],
-                    ),
-                    self.config.task,
-                )
+        rows = load_rows(self.config.data_path, self.config.max_samples)
+        return [
+            GlyphTask(
+                GlyphTaskData(
+                    idx=idx,
+                    name=row["case_id"],
+                    prompt=row["prompt"],
+                    arm=row["arm"],
+                    case_id=row["case_id"],
+                    trace_prefix=row["trace_prefix"],
+                    test_code=row["test_code"],
+                ),
+                self.config.task,
             )
-        return tasks
+            for idx, row in enumerate(rows)
+        ]
 
 
 __all__ = ["GlyphTaskset"]

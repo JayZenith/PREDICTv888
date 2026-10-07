@@ -22,12 +22,6 @@ from pathlib import Path
 from openai import AsyncOpenAI
 
 
-PASS = "PASS"
-ASSERTION_FAILURE = "ASSERTION_FAILURE"
-RUNTIME_ERROR = "RUNTIME_ERROR"
-SYNTAX_ERROR = "SYNTAX_ERROR"
-TIMEOUT = "TIMEOUT"
-OTHER = "OTHER"
 SUPPORTED_TOOLS = frozenset({"read_file", "apply_patch", "python_test"})
 STOP_TOKEN_ID = 151643  # <|endoftext|>, the turn end in configs/chat_template.jinja
 TOOL_NAME_RE = re.compile(r"^[A-Za-z_]\w*$")
@@ -35,6 +29,13 @@ PREDICTION_TURN_RE = re.compile(
     r"<PREDICTION>\n(.+)\n</PREDICTION>\n(CALL [^\n]+)", re.DOTALL
 )
 VALUE_TIMEOUT = 5
+MAX_FEEDBACK_CHARS = 2000
+SANDBOX_ENV = {
+    "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+    "LANG": "C.UTF-8",
+    "HOME": "/tmp",
+    "PYTHONDONTWRITEBYTECODE": "1",
+}
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,6 @@ class Result:
     stderr: str
     exit_code: int
     timed_out: bool = False
-    outcome: str | None = None
 
 
 def parse_call_line(line: str) -> tuple[Call | None, str | None]:
@@ -132,44 +132,26 @@ def confined_path(value: str, root: Path, *, require_exists: bool = False) -> Pa
     return candidate
 
 
-def _failed_outcome(stderr: str, timed_out: bool = False) -> str:
-    if timed_out:
-        return TIMEOUT
-    if "SyntaxError" in stderr or "IndentationError" in stderr:
-        return SYNTAX_ERROR
-    if "AssertionError" in stderr:
-        return ASSERTION_FAILURE
-    if "Traceback (most recent call last)" in stderr:
-        return RUNTIME_ERROR
-    return OTHER
-
-
 def run_hidden_tests(project: Path, test_code: str, timeout: int) -> Result:
+    """Run solution.py followed by the asserts and return the interpreter's own output."""
     solution = project / "solution.py"
     if not solution.is_file():
-        return Result(False, "", "solution.py not found", -1, outcome=OTHER)
+        return Result(False, "", "solution.py not found", -1)
+    # A random marker printed after the asserts, so an early sys.exit(0) cannot pass.
+    marker = f"PREDICT_TESTS_PASSED_{secrets.token_hex(16)}"
     source = solution.read_text(encoding="utf-8")
     with tempfile.TemporaryDirectory(prefix="predict-python-") as temporary:
-        root = Path(temporary)
-        check = root / "check.py"
-        marker = f"PREDICT_TESTS_PASSED_{secrets.token_hex(16)}"
-        check.write_text(
+        Path(temporary, "check.py").write_text(
             f"{source.rstrip()}\n\n{test_code.rstrip()}\n\n"
             f"import sys as _predict_sys\n"
             f"_predict_sys.__stdout__.write({marker!r} + '\\n')\n",
             encoding="utf-8",
         )
-        env = {
-            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-            "LANG": "C.UTF-8",
-            "HOME": "/tmp",
-            "PYTHONDONTWRITEBYTECODE": "1",
-        }
         try:
             process = subprocess.Popen(
-                ["python3", "-B", str(check)],
-                cwd=root,
-                env=env,
+                ["python3", "-B", "check.py"],
+                cwd=temporary,
+                env=SANDBOX_ENV,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -177,31 +159,16 @@ def run_hidden_tests(project: Path, test_code: str, timeout: int) -> Result:
             )
             try:
                 stdout, stderr = process.communicate(timeout=timeout)
+                stderr = stderr.replace(f"{temporary}/", "")  # keep output independent of the temp dir
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.communicate()
-                return Result(
-                    False,
-                    "",
-                    f"tests timed out after {timeout}s",
-                    -1,
-                    timed_out=True,
-                    outcome=TIMEOUT,
-                )
+                return Result(False, "", f"tests timed out after {timeout}s", -1, timed_out=True)
         except OSError as exc:
-            return Result(False, "", str(exc), exc.errno or -1, outcome=OTHER)
-
-    if process.returncode == 0 and stdout.strip().splitlines()[-1:] == [marker]:
-        return Result(True, "tests passed", "", 0, outcome=PASS)
-
-    outcome = _failed_outcome(stderr)
-    detail = {
-        ASSERTION_FAILURE: "tests failed",
-        RUNTIME_ERROR: "generated solution raised a runtime error",
-        SYNTAX_ERROR: "generated solution has a syntax error",
-        OTHER: "tests failed",
-    }[outcome]
-    return Result(False, "", detail, process.returncode, outcome=outcome)
+            return Result(False, "", str(exc), exc.errno or -1)
+    passed = process.returncode == 0 and stdout.strip().splitlines()[-1:] == [marker]
+    stdout = stdout.replace(marker + "\n", "")
+    return Result(passed, stdout[-MAX_FEEDBACK_CHARS:], stderr[-MAX_FEEDBACK_CHARS:], process.returncode)
 
 
 def execute_tool(call: Call, root: Path, test_code: str, timeout: int) -> Result:
@@ -273,19 +240,13 @@ def actual_values(project: Path, test_file: Path) -> list[str]:
     """What the current solution returns on each assert's call, in SFT format."""
     count = sum(isinstance(node, ast.Assert) for node in ast.parse(test_file.read_text()).body)
     solution = (project / "solution.py").resolve()
-    env = {
-        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-        "LANG": "C.UTF-8",
-        "HOME": "/tmp",
-        "PYTHONDONTWRITEBYTECODE": "1",
-    }
     values = []
     with tempfile.TemporaryDirectory(prefix="predict-values-") as cwd:
         for index in range(count):
             process = subprocess.Popen(
                 ["python3", "-B", "-c", VALUE_SCRIPT, str(solution), str(test_file.resolve()), str(index)],
                 cwd=cwd,
-                env=env,
+                env=SANDBOX_ENV,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
