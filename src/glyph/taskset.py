@@ -69,12 +69,14 @@ class GlyphTask(vf.Task[GlyphTaskData, vf.State, GlyphTaskConfig]):
 
 
 class GlyphTasksetConfig(vf.TasksetConfig):
-    data_path: str
+    data_path: str | None = None  # optional only so verifiers can build the config before the CLI fills it
     task: GlyphTaskConfig = GlyphTaskConfig()
 
 
 class GlyphTaskset(vf.Taskset[GlyphTask, GlyphTasksetConfig]):
     def load(self) -> list[GlyphTask]:
+        if not self.config.data_path:
+            raise ValueError("GlyphTaskset requires data_path")
         rows = [json.loads(line) for line in Path(self.config.data_path).read_text().splitlines()]
         return [
             GlyphTask(GlyphTaskData(idx=i, name=row["case_id"], prompt=row["prompt"], arm=row["arm"],
