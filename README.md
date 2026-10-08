@@ -20,19 +20,27 @@ CALL apply_patch {...}
 ```
 
 The prediction is never graded or shown back to the agent. Tests return the interpreter's
-real output. Both arms get the same RL reward:
+real output. Both arms get the same RL reward; the current one is plain pass/fail. "Passed"
+means the agent ran a passing `python_test`, the final code passes, and it made no protocol
+error.
+
+### Reward shapes tried
 
 ```text
-reward = passed × (1 − 0.1 × (python_test runs − 1))
+commit    reward (same for both arms)                           results
+72cf7f7   passed × (1 − 0.1 × (python_test runs − 1))           seeds 42–44 below
+current   passed (plain pass/fail)                              not run yet
 ```
 
-Arm A can only save test runs by writing correct code first. Arm B can also catch a wrong
-patch in its prediction. If prediction helps, Arm B should gain more.
+`test_run_cost` in `GlyphTaskConfig` sets the per-run cost (0 = plain pass/fail). The cost was
+meant to reward Arm B for catching a wrong patch in its prediction instead of testing it; it
+also made Arm A learn to quit (see below).
 
 ## Results
 
-Greedy pass@1 on 500 held-out MBPP tasks. RL: 50 steps, lr 3e-6, 128 rollouts per step, all
-seeds from the same SFT checkpoints.
+Reward: `passed × (1 − 0.1 × (python_test runs − 1))`, commit `72cf7f7`. Greedy pass@1 on 500
+held-out MBPP tasks. RL: 50 steps, lr 3e-6, 128 rollouts per step, all seeds from the same
+SFT checkpoints.
 
 ```text
             SFT    RL seed 42   RL seed 43   RL seed 44   RL mean

@@ -19,7 +19,7 @@ class GlyphTaskData(vf.TaskData):
 
 class GlyphTaskConfig(vf.TaskConfig):
     max_trace_tokens: int = 4096
-    test_run_cost: float = 0.1  # reward lost per python_test run beyond the first
+    test_run_cost: float = 0.0  # reward lost per python_test run beyond the first (0 = plain pass/fail)
 
 
 class GlyphTask(vf.Task[GlyphTaskData, vf.State, GlyphTaskConfig]):
@@ -54,7 +54,7 @@ class GlyphTask(vf.Task[GlyphTaskData, vf.State, GlyphTaskConfig]):
 
     @vf.reward(weight=1.0)
     async def reward(self, trace: vf.Trace) -> float:
-        """Same for both arms: 1 for passing, minus test_run_cost per extra python_test run."""
+        """Same for both arms: 1 for passing, minus test_run_cost per extra python_test run if set."""
         if not self._passed(trace):
             return 0.0
         return 1.0 - self.config.test_run_cost * (self._test_runs(trace) - 1)
