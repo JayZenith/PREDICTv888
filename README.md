@@ -140,7 +140,7 @@ The Arm A traces and task files (`data/arm_a_{train,test}.jsonl`) come from the 
 PREDICT repo's `data/prepare.py`. `b_restate` is a control not used in the results above.
 
 Checkpoints (Hugging Face, private): `JayZenith/PREDICTv888_SFT_{A,B}`,
-`JayZenith/PREDICTv888_RL_{A,B}_SEED42`, `JayZenith/PREDICTv888_RL_B_SEED43`,
+`JayZenith/PREDICTv888_RL_{A,B}_SEED42`, `JayZenith/PREDICTv888_RL_{A,B}_SEED43`,
 `JayZenith/PREDICTv888_RL_{A,B}_SEED44`. Eval traces and logs for every run are kept
 outside the repo.
 
