@@ -29,7 +29,7 @@ error.
 ```text
 commit    reward (same for both arms)                           results
 72cf7f7   passed × (1 − 0.1 × (python_test runs − 1))           seeds 42–44 below
-current   passed (plain pass/fail)                              not run yet
+6c5cf53   passed (plain pass/fail)                              running
 ```
 
 `test_run_cost` in `GlyphTaskConfig` sets the per-run cost (0 = plain pass/fail). The cost was
