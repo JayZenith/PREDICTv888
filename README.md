@@ -31,18 +31,39 @@ patch in its prediction. If prediction helps, Arm B should gain more.
 
 ## Results
 
-Greedy pass@1 on 500 held-out MBPP tasks. RL: 50 steps, lr 3e-6, 128 rollouts per step.
+Greedy pass@1 on 500 held-out MBPP tasks. RL: 50 steps, lr 3e-6, 128 rollouts per step, all
+seeds from the same SFT checkpoints.
 
 ```text
-            SFT    RL seed 42   RL seed 43
-Arm A       232       278          —
-Arm B       244       290          —
+            SFT    RL seed 42   RL seed 43   RL seed 44   RL mean
+Arm A       232       278          275          250        267.7
+Arm B       244       290          296          288        291.3
 ```
 
-Seed 42: on the same tasks, 47 solved only by Arm B and 35 only by Arm A, within noise.
-Both arms gain 46 tasks from RL and use 1.07 test runs per pass.
+Arm B wins every seed. Tasks solved by only one arm: 47 B / 35 A (seed 42), 54 B / 22 A
+(seed 43), 59 B / 21 A (seed 44).
 
-The predictions do not work. Re-running every Arm B patch from the eval traces:
+The gap comes mostly from Arm A collapsing. In three of four Arm A runs, RL taught it to stop
+after its first failed test, answering `FINAL: ... passed the tests` (or a malformed turn)
+instead of fixing the code. Arm B never did:
+
+```text
+after its first failed test, the agent...     quits    keeps going (and later passes)
+Arm A seed 42                                    0/221      221 (18)
+Arm A seed 43                                  212/212        0
+Arm A seed 43, first run                       222/222        0      (scored 264; rerun kept)
+Arm A seed 44                                  236/236        0
+Arm B seed 42                                    0/217      217 (19)
+Arm B seed 43                                    0/202      202 (11)
+Arm B seed 44                                    0/215      215 (18)
+```
+
+Retrying after a failed test usually still ends at the 8-call limit with no pass, so the
+retry tokens sit mostly in 0-reward rollouts and GRPO pushes them down until the agent stops
+retrying. Arm B's turns after a patch always include a PREDICTION block, the same pattern as
+in its passing rollouts, which may be what keeps it from learning to quit.
+
+The predictions themselves do not work. Re-running every Arm B patch from the eval traces:
 
 ```text
 per PREDICTION block                                SFT    RL seed 42
@@ -53,19 +74,15 @@ flags a mismatch on wrong code, tests anyway         38        27
 predicted values that are correct                   37%       38%
 ```
 
-- Arm B mostly copies the expected value instead of predicting what the code returns.
-- RL made it act on its predictions less (52 → 8 fixes before testing): a real traceback
-  costs 0.1 and says more than its own guess.
-- Arm B's small lead comes from better first patches, written before any prediction, not
-  from catching bugs.
-
-Likely causes: in the SFT data about 70% of PREDICTION blocks are on correct code, where the
-right prediction is the expected value, so copying is usually right; and nothing in RL
-rewards a correct prediction.
+Arm B mostly copies the expected value instead of predicting what the code returns, and RL
+made it act on its predictions less. In the SFT data about 70% of PREDICTION blocks are on
+correct code, where the right prediction is the expected value, and nothing in RL rewards a
+correct prediction. So the benefit comes from having the step, not from its accuracy.
 
 ## Limits
 
-- One or two seeds; seeds of the same setup differ by up to ~30 tasks.
+- Three seeds per arm, all from one SFT checkpoint per arm, so the spread understates the
+  full run-to-run variation.
 - MBPP is public since 2021 and likely in Qwen3's pretraining data. Both arms share this.
 - The asserts in the prompt are the ones graded, so hardcoding them would pass. Spot checks
   found it rare.
@@ -89,7 +106,7 @@ each RL run two (one trains, one serves rollouts).
    CUDA_VISIBLE_DEVICES=1 bash scripts/run.sh sft b
    ```
 
-3. RL, 50 steps per arm and seed (~45 min). Seeds 42 and 43:
+3. RL, 50 steps per arm and seed (~45 min). Seeds 42, 43, 44:
 
    ```bash
    bash scripts/run.sh rl a --inference.seed 42 --output-dir outputs/arm_a_rl_s42
@@ -123,7 +140,9 @@ The Arm A traces and task files (`data/arm_a_{train,test}.jsonl`) come from the 
 PREDICT repo's `data/prepare.py`. `b_restate` is a control not used in the results above.
 
 Checkpoints (Hugging Face, private): `JayZenith/PREDICTv888_SFT_{A,B}`,
-`JayZenith/PREDICTv888_RL_{A,B}_SEED42`.
+`JayZenith/PREDICTv888_RL_{A,B}_SEED42`, `JayZenith/PREDICTv888_RL_B_SEED43`,
+`JayZenith/PREDICTv888_RL_{A,B}_SEED44`. Eval traces and logs for every run are kept
+outside the repo.
 
 ## Notes
 
