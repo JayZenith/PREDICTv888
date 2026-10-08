@@ -79,6 +79,56 @@ made it act on its predictions less. In the SFT data about 70% of PREDICTION blo
 correct code, where the right prediction is the expected value, and nothing in RL rewards a
 correct prediction. So the benefit comes from having the step, not from its accuracy.
 
+## Why Arm A learns to quit: how the loss treats long attempts
+
+GRPO samples 16 attempts per task and scores each one. An attempt's **advantage** is its
+reward minus the group's average reward. Every token the model wrote in that attempt is
+pushed up (positive advantage) or down (negative). The variants differ in how much push each
+token gets:
+
+```text
+                     loss for a batch                        a 100-token failed attempt vs a 10-token one
+GRPO (original)      average tokens within each attempt,     same total push; each of its tokens gets 1/10
+                     then average over attempts                as much
+DAPO                 sum over all tokens / tokens in batch   every token gets the same push, so it gets
+                                                               10x the total
+Dr. GRPO             sum over all tokens / a fixed constant  same as DAPO for this question
+```
+
+DAPO and Dr. GRPO chose per-token weighting on purpose: under original GRPO, long bad
+answers (repetition, gibberish) are punished too little per token.
+
+PRIME-RL (`d334ea5`) does what Dr. GRPO does: the advantage is reward minus the group mean,
+with no division by the group's standard deviation (`orchestrator/algo/grpo.py`), and the loss
+is divided by the batch's total token count (`trainer/rl/loss.py`).
+
+What that did here. After a failed test, about half of all rollouts kept retrying until the
+8-call limit and still failed; about 4% recovered. A long failed retry and an immediate quit
+both score 0, but the retry has many more tokens, so it takes most of the downward push, and
+the tokens that keep the agent going are pushed down most. In three of four Arm A runs this
+flipped within about ten steps (around steps 25–35) from long retries to quitting right after
+the first failed test. The training logs show it (share of training rollouts, seed 44):
+
+```text
+                              steps 1–10  11–20  21–30  31–40  41–50
+Arm A  fails by quitting fast      2%       5%     3%    27%    38%
+Arm A  fails after long retry     50%      53%    47%    19%     0%
+Arm B  fails by quitting fast      4%       5%     3%     2%     4%
+Arm B  fails after long retry     51%      53%    45%    47%    33%
+```
+
+Arm B faces the same pressure; whether it is immune or just slower is not known (50 steps).
+
+Ways to remove the pressure, not yet tried:
+
+- Plain pass/fail reward, without the 0.1 cost per extra test run. The cost makes a recovered
+  pass worth less than a first-try pass. An earlier version of this setup used plain pass/fail
+  (with one-line test feedback) and Arm A never learned to quit in three seeds.
+- Partial credit: reward = fraction of asserts the final code passes, so a retry that gets
+  closer scores above a quick quit.
+- Original GRPO averaging within each attempt, so a long failure and a quick quit get the same
+  total push.
+
 ## Limits
 
 - Three seeds per arm, all from one SFT checkpoint per arm, so the spread understates the
