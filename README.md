@@ -140,7 +140,7 @@ Arm B  fails after long retry     51%      53%    45%    47%    33%
 
 Arm B faces the same pressure; whether it is immune or just slower is not known (50 steps).
 
-Ways to remove the pressure, not yet tried:
+Ways to remove the pressure (only the first tried, on one seed):
 
 - Plain pass/fail reward, without the 0.1 cost per extra test run. The cost makes a recovered
   pass worth less than a first-try pass. Tried on seed 42 only (above): no quitting, but seed 42
