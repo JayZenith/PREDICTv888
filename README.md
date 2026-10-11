@@ -29,7 +29,7 @@ error.
 ```text
 commit    reward (same for both arms)                           results
 72cf7f7   passed × (1 − 0.1 × (python_test runs − 1))           seeds 42–44 below
-6c5cf53   passed (plain pass/fail)                              running
+6c5cf53   passed (plain pass/fail)                              seed 42 only, below
 ```
 
 `test_run_cost` in `GlyphTaskConfig` sets the per-run cost (0 = plain pass/fail). The cost was
@@ -87,6 +87,19 @@ made it act on its predictions less. In the SFT data about 70% of PREDICTION blo
 correct code, where the right prediction is the expected value, and nothing in RL rewards a
 correct prediction. So the benefit comes from having the step, not from its accuracy.
 
+### Plain pass/fail (commit `6c5cf53`), seed 42 only
+
+```text
+                         Arm A   Arm B
+passed (of 500)           274     282
+recovered after a fail     10      21
+quit after first fail    0/227   0/223
+```
+
+On the same tasks, 47 solved only by Arm B and 39 only by Arm A: within noise. Neither arm
+learned to quit. Seeds 43 and 44 (where Arm A collapsed under the test-run cost) were not run
+with this reward, so it is not shown that removing the cost prevents the collapse.
+
 ## Why Arm A learns to quit: how the loss treats long attempts
 
 GRPO samples 16 attempts per task and scores each one. An attempt's **advantage** is its
@@ -130,8 +143,8 @@ Arm B faces the same pressure; whether it is immune or just slower is not known 
 Ways to remove the pressure, not yet tried:
 
 - Plain pass/fail reward, without the 0.1 cost per extra test run. The cost makes a recovered
-  pass worth less than a first-try pass. An earlier version of this setup used plain pass/fail
-  (with one-line test feedback) and Arm A never learned to quit in three seeds.
+  pass worth less than a first-try pass. Tried on seed 42 only (above): no quitting, but seed 42
+  never collapsed under the cost either.
 - Partial credit: reward = fraction of asserts the final code passes, so a retry that gets
   closer scores above a quick quit.
 - Original GRPO averaging within each attempt, so a long failure and a quick quit get the same
